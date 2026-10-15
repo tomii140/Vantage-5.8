@@ -34,14 +34,14 @@ void UCryptoFinanceSubsystem::Deinitialize()
 
 void UCryptoFinanceSubsystem::ConnectWebSocket()
 {
-    // 1. Cambiado a @miniTicker para evitar campos ambiguos de timestamps
-    FString ServerUrl = TEXT("wss://stream.binance.com:9443/ws/btcusdt@miniTicker");
+    // Stream masivo de Binance que transmite todo el mercado en un solo paquete JSON
+    FString ServerUrl = TEXT("wss://stream.binance.com:9443/ws/!miniTicker@arr");
 
     WebSocket = FWebSocketsModule::Get().CreateWebSocket(ServerUrl);
 
     WebSocket->OnConnected().AddLambda([]()
         {
-            UE_LOG(LogTemp, Log, TEXT("[Vantage] Conectado exitosamente al WebSocket de Binance (miniTicker)."));
+            UE_LOG(LogTemp, Log, TEXT("[Vantage] Conectado al WebSocket masivo de Binance (!miniTicker@arr)."));
         });
 
     WebSocket->OnConnectionError().AddLambda([](const FString& Error)
@@ -56,30 +56,31 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
 
     WebSocket->OnMessage().AddLambda([this](const FString& MessageString)
         {
-            TSharedPtr<FJsonObject> JsonObject;
+            TArray<TSharedPtr<FJsonValue>> JsonArray;
             TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(MessageString);
 
-            if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+            // El stream masivo llega como un arreglo JSON de objetos
+            if (FJsonSerializer::Deserialize(Reader, JsonArray))
             {
-                FCryptoAssetData AssetData;
-
-                AssetData.Symbol = JsonObject->GetStringField(TEXT("s")).ToUpper();
-
-                // 2. Uso de Atod para precisión exacta (double) evitando desbordamientos
-                AssetData.LastPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("c")));
-                AssetData.HighPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("h")));
-                AssetData.LowPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("l")));
-                AssetData.Volume = FCString::Atod(*JsonObject->GetStringField(TEXT("v")));
-
-                // El miniTicker no envía variaciones porcentuales directamente, se inicializan seguras
-                AssetData.PriceChange = 0.0;
-                AssetData.PriceChangePercent = 0.0;
-
+                FScopeLock Lock(&Mutex);
+                for (const auto& Value : JsonArray)
                 {
-                    FScopeLock Lock(&Mutex);
-                    AssetCache.Add(AssetData.Symbol, AssetData);
-                }
+                    TSharedPtr<FJsonObject> JsonObject = Value->AsObject();
+                    if (JsonObject.IsValid())
+                    {
+                        FCryptoAssetData AssetData;
+                        AssetData.Symbol = JsonObject->GetStringField(TEXT("s")).ToUpper();
+                        AssetData.LastPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("c")));
+                        AssetData.HighPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("h")));
+                        AssetData.LowPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("l")));
+                        AssetData.Volume = FCString::Atod(*JsonObject->GetStringField(TEXT("v")));
+                        AssetData.PriceChange = 0.0;
+                        AssetData.PriceChangePercent = 0.0;
 
+                        // Almacenamos/actualizamos cada activo en el mapa global
+                        AssetCache.Add(AssetData.Symbol, AssetData);
+                    }
+                }
                 bNewDataReceived = true;
             }
         });
@@ -114,4 +115,10 @@ bool UCryptoFinanceSubsystem::GetAssetData(const FString& Symbol, FCryptoAssetDa
         return true;
     }
     return false;
+}
+
+void UCryptoFinanceSubsystem::GetAllAssets(TArray<FCryptoAssetData>& OutAssets)
+{
+    FScopeLock Lock(&Mutex);
+    AssetCache.GenerateValueArray(OutAssets);
 }

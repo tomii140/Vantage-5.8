@@ -49,6 +49,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     bool GetAssetData(const FString& Symbol, FCryptoAssetData& OutData);
 
+    // NUEVO: Permite extraer todo el catálogo de activos en caché
+    UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
+    void GetAllAssets(TArray<FCryptoAssetData>& OutAssets);
+
 private:
     void ConnectWebSocket();
     bool HandleTicker(float DeltaTime);

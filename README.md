@@ -55,3 +55,50 @@ ACryptoTerminalActor.cpp (Lectura robusta desde el caché del subsistema y forma
 
 3. Estado Actual
 El proyecto compila exitosamente (Succeeded en Development_Editor x64), la conexión WebSocket con Binance se establece de forma limpia y la terminal del motor (ACryptoTerminalActor) ya imprime en tiempo real y con total precisión las cotizaciones reales de Bitcoin (BTCUSDT).
+--------------------------------------------------------------------------------------------------------
+
+# Vantage — Documentación del Estado del Proyecto y Registro de Cambios
+Fecha: 15/10/2026
+
+1. Evolución de la Arquitectura y Modificaciones de Código
+Optimización de Concurrencia (Eliminación de hilos secundarios): Se removieron por completo los archivos CryptoWorker.h y CryptoWorker.cpp. La gestión de la conexión WebSocket se trasladó de forma directa y nativa al hilo principal dentro del subsistema para maximizar la estabilidad.
+
+Subsistema Global (UCryptoFinanceSubsystem): Mantiene la persistencia a nivel de GameInstance, asegurando el caché de activos mediante exclusión mutua (FCriticalSection) y sincronizando las actualizaciones hacia los actores visuales.
+
+Stream de Binance Optimizado: Migración del endpoint completo (@ticker) al endpoint ligero @miniTicker (wss://[stream.binance.com:9443/ws/btcusdt@miniTicker](https://stream.binance.com:9443/ws/btcusdt@miniTicker)), eliminando campos redundantes que saturaban el procesamiento numérico.
+
+Tipos de Datos de Alta Precisión: Actualización de todas las variables en la estructura FCryptoAssetData a tipo double, implementando FCString::Atod para conversiones numéricas exactas sin pérdida de decimales.
+
+Control de Frecuencia (Throttling): Configuración de un FTSTicker con un intervalo fijo de 300 ms (0.3 s) para regular el flujo de emisiones visuales hacia el terminal y evitar sobrecarga en pantalla.
+
+2. Inventario de Archivos Afectados
+Eliminados:
+
+CryptoWorker.h
+
+CryptoWorker.cpp
+
+Actualizados:
+
+CryptoFinanceSubsystem.h y .cpp (Lógica de red nativa y stream miniTicker).
+
+ACryptoTerminalActor.cpp (Lectura robusta desde el subsistema).
+
+No Actualizados / Descartados:
+
+Módulos y plugins de OpenXR (descartados al no requerir cascos físicos de RV/RA; el desarrollo se enfoca en despliegue móvil táctil con simulación espacial nativa).
+
+3. Estado Actual del Proyecto
+Compilación: Exitosa (Succeeded en configuración Development_Editor x64).
+
+Conectividad: Enlace WebSocket con Binance operativo y estable, procesando cotizaciones en tiempo real (ej. BTCUSDT).
+
+Arquitectura de Interfaz Definida:
+
+Estructura híbrida 2D/3D para smartphones.
+
+Visualización minimalista por defecto (solo nombres/símbolos de criptomonedas).
+
+Sistema de layouts modulares (moldes geométricos 3D: diagonal, horizontal, vertical, circular; vistas 2D: fila de 5 y matriz extendida de 15 elementos).
+
+Interfaz de detalle bajo demanda mediante toque (tap) para desplegar la información completa del subsistema.

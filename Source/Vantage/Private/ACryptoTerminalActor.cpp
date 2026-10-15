@@ -2,6 +2,8 @@
 #include "CryptoFinanceSubsystem.h"
 #include "Engine/Engine.h"
 
+int32 ACryptoTerminalActor::GlobalScrollOffset = 0;
+
 ACryptoTerminalActor::ACryptoTerminalActor()
 {
     PrimaryActorTick.bCanEverTick = true;
@@ -10,7 +12,17 @@ ACryptoTerminalActor::ACryptoTerminalActor()
 void ACryptoTerminalActor::BeginPlay()
 {
     Super::BeginPlay();
-    UE_LOG(LogTemp, Log, TEXT("[Vantage] CryptoTerminalActor inicializado en la escena. Esperando datos del WebSocket..."));
+    UE_LOG(LogTemp, Log, TEXT("[Vantage] Master CryptoTerminalActor inicializado gestionando 5 slots."));
+}
+
+void ACryptoTerminalActor::SetGlobalScrollOffset(int32 NewOffset)
+{
+    GlobalScrollOffset = FMath::Max(0, NewOffset);
+}
+
+int32 ACryptoTerminalActor::GetGlobalScrollOffset()
+{
+    return GlobalScrollOffset;
 }
 
 void ACryptoTerminalActor::Tick(float DeltaTime)
@@ -29,39 +41,35 @@ void ACryptoTerminalActor::Tick(float DeltaTime)
         UCryptoFinanceSubsystem* FinanceSubsystem = GameInstance->GetSubsystem<UCryptoFinanceSubsystem>();
         if (FinanceSubsystem)
         {
-            FCryptoAssetData AssetData;
-            if (FinanceSubsystem->GetAssetData(TargetSymbol, AssetData))
-            {
-                FString DebugMessage = FString::Printf(
-                    TEXT("=== [VANTAGE CRYPTO DATA] ===\n"
-                        "Símbolo: %s\n"
-                        "Precio Actual (LastPrice): %.2f\n"
-                        "Cambio (PriceChange): %.2f\n"
-                        "Variación (PriceChangePercent): %.2f%%\n"
-                        "Máximo 24h (HighPrice): %.2f\n"
-                        "Mínimo 24h (LowPrice): %.2f\n"
-                        "Volumen (Volume): %.2f"),
-                    *AssetData.Symbol,
-                    AssetData.LastPrice,
-                    AssetData.PriceChange,
-                    AssetData.PriceChangePercent,
-                    AssetData.HighPrice,
-                    AssetData.LowPrice,
-                    AssetData.Volume
-                );
+            TArray<FCryptoAssetData> AllAssets;
+            FinanceSubsystem->GetAllAssets(AllAssets);
 
-                UE_LOG(LogTemp, Log, TEXT("%s"), *DebugMessage);
-
-                if (GEngine)
-                {
-                    GEngine->AddOnScreenDebugMessage(-1, PrintInterval, FColor::Cyan, DebugMessage);
-                }
-            }
-            else
+            if (AllAssets.Num() > 0)
             {
-                if (GEngine)
+                // Iteramos en un bucle cerrado de 0 a 4 para los 5 slots simultáneos
+                for (int32 i = 0; i < DisplayLimit; ++i)
                 {
-                    GEngine->AddOnScreenDebugMessage(-1, 1.0f, FColor::Yellow, FString::Printf(TEXT("[Vantage] Esperando datos de %s en caché..."), *TargetSymbol));
+                    int32 TargetIndex = GlobalScrollOffset + i;
+
+                    if (TargetIndex < AllAssets.Num())
+                    {
+                        const FCryptoAssetData& Data = AllAssets[TargetIndex];
+
+                        FString DebugMessage = FString::Printf(
+                            TEXT("=== [SLOT %d] ===\n"
+                                "Símbolo: %s | Precio: $%.2f | Vol: %.2f"),
+                            i,
+                            *Data.Symbol,
+                            Data.LastPrice,
+                            Data.Volume
+                        );
+
+                        if (GEngine)
+                        {
+                            // Imprime cada slot de manera independiente en pantalla sin solaparse
+                            GEngine->AddOnScreenDebugMessage(10 + i, PrintInterval + 0.1f, FColor::Cyan, DebugMessage);
+                        }
+                    }
                 }
             }
         }
