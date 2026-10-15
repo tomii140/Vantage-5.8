@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
-#include "CryptoWorker.h"
+#include "IWebSocket.h"
 #include "CryptoFinanceSubsystem.generated.h"
 
 USTRUCT(BlueprintType)
@@ -14,22 +14,22 @@ struct FCryptoAssetData
     FString Symbol;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float LastPrice;
+    double LastPrice;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float PriceChange;
+    double PriceChange;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float PriceChangePercent;
+    double PriceChangePercent;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float HighPrice;
+    double HighPrice;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float LowPrice;
+    double LowPrice;
 
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
-    float Volume;
+    double Volume;
 };
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnCryptoDataUpdated, const TArray<FCryptoAssetData>&, UpdatedAssets);
@@ -50,10 +50,13 @@ public:
     bool GetAssetData(const FString& Symbol, FCryptoAssetData& OutData);
 
 private:
-    bool Tick(float DeltaTime);
+    void ConnectWebSocket();
+    bool HandleTicker(float DeltaTime);
 
-    TSharedPtr<FCryptoWorker> CryptoWorker;
+    TSharedPtr<IWebSocket> WebSocket;
     TMap<FString, FCryptoAssetData> AssetCache;
     FCriticalSection Mutex;
     FTSTicker::FDelegateHandle TickerHandle;
+
+    bool bNewDataReceived = false;
 };

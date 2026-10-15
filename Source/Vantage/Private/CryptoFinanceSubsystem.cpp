@@ -1,51 +1,108 @@
 #include "CryptoFinanceSubsystem.h"
+#include "WebSocketsModule.h"
 #include "Containers/Ticker.h"
+#include "Serialization/JsonSerializer.h"
+#include "Dom/JsonObject.h"
 
 void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
     Super::Initialize(Collection);
 
-    // Arrancamos el hilo secundario de red
-    CryptoWorker = MakeShared<FCryptoWorker>();
+    if (!FModuleManager::Get().IsModuleLoaded("WebSockets"))
+    {
+        FModuleManager::LoadModuleChecked<FWebSocketsModule>("WebSockets");
+    }
 
-    // Registramos un ticker que se ejecuta cada frame en el hilo principal de Unreal
+    ConnectWebSocket();
+
     TickerHandle = FTSTicker::GetCoreTicker().AddTicker(
-        FTickerDelegate::CreateUObject(this, &UCryptoFinanceSubsystem::Tick), 0.0f
+        FTickerDelegate::CreateUObject(this, &UCryptoFinanceSubsystem::HandleTicker), 0.3f
     );
 }
 
 void UCryptoFinanceSubsystem::Deinitialize()
 {
-    // Desregistramos el ticker
     FTSTicker::GetCoreTicker().RemoveTicker(TickerHandle);
 
-    // Detenemos y limpiamos el hilo de forma segura
-    if (CryptoWorker.IsValid())
+    if (WebSocket.IsValid() && WebSocket->IsConnected())
     {
-        CryptoWorker->EnsureCompletion();
-        CryptoWorker.Reset();
+        WebSocket->Close();
     }
 
     Super::Deinitialize();
 }
 
-bool UCryptoFinanceSubsystem::Tick(float DeltaTime)
+void UCryptoFinanceSubsystem::ConnectWebSocket()
 {
-    if (!CryptoWorker.IsValid())
+    // 1. Cambiado a @miniTicker para evitar campos ambiguos de timestamps
+    FString ServerUrl = TEXT("wss://stream.binance.com:9443/ws/btcusdt@miniTicker");
+
+    WebSocket = FWebSocketsModule::Get().CreateWebSocket(ServerUrl);
+
+    WebSocket->OnConnected().AddLambda([]()
+        {
+            UE_LOG(LogTemp, Log, TEXT("[Vantage] Conectado exitosamente al WebSocket de Binance (miniTicker)."));
+        });
+
+    WebSocket->OnConnectionError().AddLambda([](const FString& Error)
+        {
+            UE_LOG(LogTemp, Error, TEXT("[Vantage] Error de conexión WebSocket: %s"), *Error);
+        });
+
+    WebSocket->OnClosed().AddLambda([](int32 StatusCode, const FString& Reason, bool bWasClean)
+        {
+            UE_LOG(LogTemp, Warning, TEXT("[Vantage] WebSocket cerrado. Razón: %s"), *Reason);
+        });
+
+    WebSocket->OnMessage().AddLambda([this](const FString& MessageString)
+        {
+            TSharedPtr<FJsonObject> JsonObject;
+            TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(MessageString);
+
+            if (FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid())
+            {
+                FCryptoAssetData AssetData;
+
+                AssetData.Symbol = JsonObject->GetStringField(TEXT("s")).ToUpper();
+
+                // 2. Uso de Atod para precisión exacta (double) evitando desbordamientos
+                AssetData.LastPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("c")));
+                AssetData.HighPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("h")));
+                AssetData.LowPrice = FCString::Atod(*JsonObject->GetStringField(TEXT("l")));
+                AssetData.Volume = FCString::Atod(*JsonObject->GetStringField(TEXT("v")));
+
+                // El miniTicker no envía variaciones porcentuales directamente, se inicializan seguras
+                AssetData.PriceChange = 0.0;
+                AssetData.PriceChangePercent = 0.0;
+
+                {
+                    FScopeLock Lock(&Mutex);
+                    AssetCache.Add(AssetData.Symbol, AssetData);
+                }
+
+                bNewDataReceived = true;
+            }
+        });
+
+    WebSocket->Connect();
+}
+
+bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
+{
+    if (bNewDataReceived)
     {
-        return true; // Continuar intentando
+        bNewDataReceived = false;
+
+        TArray<FCryptoAssetData> CachedList;
+        {
+            FScopeLock Lock(&Mutex);
+            AssetCache.GenerateValueArray(CachedList);
+        }
+
+        OnCryptoDataUpdated.Broadcast(CachedList);
     }
 
-    FString RawJson;
-    // Procesamos todos los mensajes acumulados en la cola de forma segura en el hilo principal
-    while (CryptoWorker->GetPendingData(RawJson))
-    {
-        // Aquí procesarás el JSON de Binance en el siguiente paso. 
-        // Por ahora dejamos constancia de que el dato llegó al hilo principal sin peligro.
-        UE_LOG(LogTemp, Verbose, TEXT("[Vantage] Dato recibido en hilo principal: %s"), *RawJson);
-    }
-
-    return true; // Mantener activo el ticker
+    return true;
 }
 
 bool UCryptoFinanceSubsystem::GetAssetData(const FString& Symbol, FCryptoAssetData& OutData)
