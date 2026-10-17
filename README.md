@@ -102,3 +102,29 @@ Visualización minimalista por defecto (solo nombres/símbolos de criptomonedas)
 Sistema de layouts modulares (moldes geométricos 3D: diagonal, horizontal, vertical, circular; vistas 2D: fila de 5 y matriz extendida de 15 elementos).
 
 Interfaz de detalle bajo demanda mediante toque (tap) para desplegar la información completa del subsistema.
+
+# 
+----------------------------------------------------------------------------------------------------
+Resumen: Refactorización arquitectónica del sistema de visualización de criptomonedas, eliminando los actores individuales 3D en favor de un sistema centralizado de texturas dinámicas sobre un plano estandarizado.
+
+Problemas y Soluciones
+Problema: Discrepancias de escala, rotación y pivotes entre los distintos modelos FBX de las criptomonedas, haciendo inviable el mantenimiento de múltiples Blueprints individuales.
+
+Solución: Eliminación completa de la clase base ACryptoCoinBase y sus derivados. Se centralizó la representación visual en ACryptoSlotActor utilizando un plano genérico con materiales dinámicos (UMaterialInstanceDynamic) para proyectar texturas estandarizadas.
+
+Problema: Errores de compilación por referencias huérfanas en ACryptoTerminalActor hacia la clase eliminada.
+
+Solución: Refactorización del terminal para reemplazar CoinClassMap por CoinTextureMap (TMap<FString, UTexture2D*>).
+
+Problema: Restricciones de transformación y rotación en el visor de Blueprints debido a que la malla estática actuaba como componente raíz (RootComponent).
+
+Solución: Establecimiento de un USceneComponent genérico como raíz (SceneRoot) y reestructuración de la jerarquía de componentes hijos.
+
+Problema: Errores de sintaxis del Unreal Header Tool (UHT) por orden incorrecto de includes y nombres de archivo desalineados.
+
+Solución: Reordenamiento de las macros de generación (.generated.h al final) y unificación de nomenclaturas en los archivos fuente.
+
+Pendientes
+Asignar las texturas de las criptomonedas en el CoinTextureMap desde el editor en el Blueprint del terminal.
+
+Completar la lógica de asignación de textura en el método InitSlot de ACryptoSlotActor.

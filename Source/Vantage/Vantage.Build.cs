@@ -42,7 +42,10 @@ public class Vantage : ModuleRules
 			"EnhancedInput",
 			"WebSockets",
 			"Json",
-			"JsonUtilities"
+			"JsonUtilities",
+			"UMG",
+			"Slate",
+			"SlateCore",
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
