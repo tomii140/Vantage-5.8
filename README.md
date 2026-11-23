@@ -1,5 +1,184 @@
-# Vantage
+Vantage
 
-VANTAGE 
+Vantage is a real-time cryptocurrency market visualizer built with Unreal Engine 5 and C++.
 
-Visualización espacial en Realidad Aumentada (RA) y Realidad Virtual (RV) desarrollada en Unreal Engine para presentar 25 criptomonedas y 25 divisas extranjeras en formatos 3D interactivos.Enfoque del proyecto: Vantage no es una herramienta de análisis o modelado financiero. Su objetivo es ofrecer una presentación espacial, clara y visual de datos de mercado, evitando saturar la escena o la vista con decenas de paneles simultáneos.Propuesta y diseño visualCatálogo de 50 activos (25 cryptos + 25 divisas): Dos conjuntos definidos de 25 elementos cada uno con íconos y datos visuales asociados.Ventana visible paginada (5 elementos a la vez): En lugar de renderizar o llenar el espacio con 25 elementos en simultáneo, se muestran 5 slots por vista y se avanza o retrocede de a 5 (izquierda / derecha) mediante botones o interacciones espaciales.Disposiciones 3D: Organización configurable del grupo visible en 3D Horizontal, 3D Vertical, 3D Diagonal y 3D Circular.   Vista de detalle: Al seleccionar un activo, se despliega un panel/modal con sus datos principales (símbolo, precio actual, variación absoluta y porcentual, máximo, mínimo y volumen).   Arquitectura y rendimiento (RV / RA)Reutilización de actores (pooling): Se instancia un número reducido de slots 3D (por ejemplo, 5) y se reutilizan al paginar o actualizar datos, evitando spawnear y destruir actores en tiempo real.Refresco controlado: La actualización de datos se gestiona a intervalos periódicos configurables (en el rango de 200–300 ms) en lugar de ejecutar lógica pesada en cada Tick de frame.Parámetros expuestos en Detalles: Diseño pensado para ajustar modos de layout, espaciados, intervalos de actualización, listados de símbolos y texturas directamente desde el editor de Unreal.   Estructura actual del código (C++ / UMG)UCryptoFinanceSubsystem (UGameInstanceSubsystem): Gestiona la recepción de datos en tiempo real vía WebSocket, almacena los activos en caché de forma segura entre hilos y publica actualizaciones periódicas.ACryptoTerminalActor (AActor): Controla el modo de disposición 3D, el cálculo de posiciones de los slots, la paginación y la selección de activos.   ACryptoSlotActor (AActor): Representa la plantilla 3D de cada elemento con malla base, plano/material dinámico para el ícono y componente de widget en espacio de mundo (World Space).ICryptoInteractableInterface (UInterface): Define eventos de interacción (OnHoverStart, OnHoverEnd, OnSelectAsset) compatibles con C++ y Blueprints para punteros/controladores de RV y RA.WBP_CryptoDetailModal (UUserWidget): Interfaz de detalle para visualizar los campos del activo seleccionado.
+The project connects to Binance through a WebSocket stream, filters a configurable set of USDT trading pairs, stores the latest market data in a centralized subsystem, and exposes that data to in-world terminal and slot actors.
+
+Vantage is a learning and portfolio project focused on Unreal Engine C++, real-time data integration, and modular visualization. It is not a trading platform or an exchange.
+
+Overview
+
+Engine: Unreal Engine 5
+
+Language: C++
+
+Market data source: Binance WebSocket
+
+Connection type: All-market mini-ticker stream
+
+Core architecture: UGameInstanceSubsystem
+
+Visualization: Unreal actors, dynamic materials, and widget components
+
+Current Features
+
+Receives Binance mini-ticker updates through a WebSocket connection.
+
+Filters incoming market data using a configurable list of target symbols.
+
+Maintains a centralized cache of the latest data for each asset.
+
+Uses a thread-safe critical section when accessing shared market data.
+
+Broadcasts data updates at a controlled interval using FTSTicker.
+
+Provides asset lookup by symbol through the subsystem.
+
+Supports ordered retrieval of configured assets.
+
+Displays assets through a terminal actor with pagination.
+
+Uses slot actors, dynamic material instances, and widget components for the visual layer.
+
+Architecture
+
+The system is divided into three main areas.
+
+1. Market Data Layer
+
+UCryptoFinanceSubsystem
+
+A UGameInstanceSubsystem responsible for the market-data lifecycle.
+
+Its responsibilities include:
+
+Opening and managing the Binance WebSocket connection.
+
+Parsing incoming JSON messages.
+
+Filtering symbols against the configured target list.
+
+Updating the in-memory asset cache.
+
+Providing access to cached asset data.
+
+Broadcasting updates at a controlled interval.
+
+Current stream endpoint:
+
+wss://stream.binance.com:9443/ws/!miniTicker@arr
+
+2. Interaction Layer
+
+CryptoInteractableInterface
+
+Defines a common interaction contract for objects that can respond to user interaction in the environment.
+
+3. Visualization Layer
+
+ACryptoTerminalActor
+
+Acts as the central terminal for displaying market assets. It retrieves data from the finance subsystem and handles the current paginated asset view.
+
+ACryptoSlotActor
+
+Represents an individual visual slot. It uses a dynamic material instance and a widget component to display asset-related visual information.
+
+Data Flow
+
+Binance WebSocket
+       |
+       v
+JSON message parsing
+       |
+       v
+Target-symbol filtering
+       |
+       v
+UCryptoFinanceSubsystem
+       |
+       v
+Thread-safe asset cache
+       |
+       v
+Controlled update broadcast
+       |
+       +--------------------+
+       |                    |
+       v                    v
+ACryptoTerminalActor   ACryptoSlotActor
+       |                    |
+       v                    v
+Asset pagination      3D slot visualization
+
+Source Structure
+
+Source/
+└── Vantage/
+    ├── Public/
+    │   ├── ACryptoSlotActor.h
+    │   ├── ACryptoTerminalActor.h
+    │   ├── CryptoFinanceSubsystem.h
+    │   └── CryptoInteractableInterface.h
+    │
+    ├── Private/
+    │   ├── ACryptoSlotActor.cpp
+    │   ├── ACryptoTerminalActor.cpp
+    │   ├── CryptoFinanceSubsystem.cpp
+    │   └── CryptoInteractableInterface.cpp
+    │
+    └── Vantage.Build.cs
+
+Technical Concepts
+
+This project is being developed to practice and demonstrate:
+
+Unreal Engine C++ development.
+
+Game Instance Subsystems and lifecycle management.
+
+WebSocket communication with an external data provider.
+
+JSON parsing and data conversion.
+
+Data caching with TMap and symbol filtering with TSet.
+
+Thread-safe access to shared data using FCriticalSection.
+
+Periodic update scheduling with FTSTicker.
+
+Delegates and communication between gameplay systems.
+
+Dynamic Material Instances and actor-based visualization.
+
+Separation between data acquisition, interaction, and presentation.
+
+Current Development Status
+
+The core data pipeline is implemented: the project connects to Binance, parses mini-ticker messages, filters configured assets, updates the cache, and exposes the data to the terminal system.
+
+The visualization and interaction layer is still being developed. Some presentation details, including the complete asset information displayed by each slot, remain to be implemented.
+
+Planned Improvements
+
+Replace the all-market mini-ticker stream with individual streams for the configured symbols, reducing unnecessary incoming data.
+
+Add robust WebSocket reconnection and connection-state handling.
+
+Review callback and subsystem shutdown lifetimes.
+
+Complete the slot's asset-information presentation.
+
+Make terminal pagination use a deterministic asset order.
+
+Improve the visual layouts for different asset arrangements.
+
+Add clearer loading, disconnected, and data-unavailable states.
+
+Expand documentation as the architecture evolves.
+
+Project Goal
+
+The goal of Vantage is to build a polished real-time market visualization experience while developing practical skills in Unreal Engine C++, networking, data structures, and modular software architecture.
+
+The project is actively evolving. Features listed under Current Features reflect the implemented code; items under Planned Improvements are not yet complete.
