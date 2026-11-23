@@ -8,99 +8,52 @@
 /**
  * FCryptoAssetData
  *
- * Estructura que representa la información de mercado de una criptomoneda.
+ * Contiene la última información de mercado conocida para un activo.
+ * Binance identifica cada mercado mediante un símbolo, por ejemplo BTCUSDT.
  *
- * Cada instancia almacena una fotografía de los últimos datos recibidos
- * desde Binance para un determinado par de negociación.
- *
- * Ejemplo:
- * BTCUSDT representa el mercado de Bitcoin frente a Tether.
- *
- * Los valores numéricos se inicializan en 0.0 para evitar utilizar
- * valores sin inicializar antes de recibir información del servidor.
- *
- * Esta estructura se utiliza tanto en C++ como en Blueprints.
+ * Los valores numéricos comienzan en cero. Esto permite crear estructuras
+ * provisionales para activos que todavía no recibieron su primer mensaje.
  */
 USTRUCT(BlueprintType)
 struct FCryptoAssetData
 {
     GENERATED_BODY()
 
-    /**
-     * Símbolo identificador del par de mercado.
-     *
-     * Ejemplo: BTCUSDT, ETHUSDT, SOLUSDT.
-     *
-     * Se almacena en mayúsculas para mantener una identificación uniforme
-     * dentro del caché del subsistema.
-     */
+    /** Identificador del mercado normalizado en mayúsculas. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     FString Symbol;
 
-    /**
-     * Último precio registrado para el activo.
-     *
-     * Se obtiene del campo "c" del mensaje miniTicker de Binance.
-     */
+    /** Último precio informado por Binance (campo JSON "c"). */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double LastPrice = 0.0;
 
-    /**
-     * Variación absoluta del precio durante el período informado.
-     *
-     * Fórmula:
-     * LastPrice - OpenPrice
-     */
+    /** Variación absoluta respecto del precio de apertura (c - o). */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChange = 0.0;
 
-    /**
-     * Variación porcentual del precio durante el período informado.
-     *
-     * Fórmula:
-     * ((LastPrice - OpenPrice) / OpenPrice) * 100
-     *
-     * Se evita la división por cero cuando OpenPrice no es válido.
-     */
+    /** Variación porcentual respecto del precio de apertura. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChangePercent = 0.0;
 
-    /**
-     * Precio máximo registrado durante el período informado.
-     *
-     * Se obtiene del campo "h" del mensaje miniTicker de Binance.
-     */
+    /** Precio máximo del período informado (campo JSON "h"). */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double HighPrice = 0.0;
 
-    /**
-     * Precio mínimo registrado durante el período informado.
-     *
-     * Se obtiene del campo "l" del mensaje miniTicker de Binance.
-     */
+    /** Precio mínimo del período informado (campo JSON "l"). */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double LowPrice = 0.0;
 
-    /**
-     * Volumen negociado durante el período informado.
-     *
-     * Se obtiene del campo "v" del mensaje miniTicker de Binance.
-     */
+    /** Volumen negociado del período informado (campo JSON "v"). */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double Volume = 0.0;
 };
 
-
 /**
- * Delegado dinámico multicast.
+ * Evento emitido cuando hay información financiera nueva para distribuir.
  *
- * Se ejecuta cuando el subsistema detecta nuevos datos de mercado
- * y llega el momento de distribuir una actualización.
- *
- * El parámetro UpdatedAssets contiene una copia de los datos disponibles
- * en el caché en el momento de generar la actualización.
- *
- * Puede vincularse desde C++ y desde Blueprints.
+ * El array se entrega como referencia constante durante la ejecución del
+ * delegado. Los consumidores que necesiten conservarlo deben hacer su propia
+ * copia; no deben guardar una referencia al parámetro.
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
     FOnCryptoDataUpdated,
@@ -108,53 +61,25 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
     UpdatedAssets
 );
 
-
 /**
  * UCryptoFinanceSubsystem
  *
- * Subsistema central encargado de recibir, procesar y distribuir
- * información financiera en tiempo real.
+ * Subsistema central de recepción, almacenamiento y distribución de datos
+ * financieros. Su ciclo de vida está asociado al GameInstance.
  *
- * Hereda de UGameInstanceSubsystem, por lo que su ciclo de vida
- * está asociado al GameInstance y no a un Actor individual del nivel.
+ * ARQUITECTURA DE DATOS:
  *
- * RESPONSABILIDADES PRINCIPALES:
+ * - TargetSymbols (TArray): catálogo ordenado y fuente de verdad para la UI.
+ * - AllowedSymbols (TSet): filtro de pertenencia rápida, construido una vez.
+ * - AssetCache (TMap): almacenamiento principal y búsqueda por símbolo.
  *
- * 1. Administrar la conexión WebSocket con Binance.
- * 2. Recibir y deserializar mensajes JSON.
- * 3. Filtrar los símbolos configurados en TargetSymbols.
- * 4. Mantener los últimos datos recibidos en AssetCache.
- * 5. Proteger el acceso concurrente al caché mediante FCriticalSection.
- * 6. Emitir actualizaciones mediante un ticker periódico.
- * 7. Proporcionar funciones de consulta para los actores visuales.
+ * No se mantiene una segunda colección de FCryptoAssetData ordenada: duplicar
+ * los registros exigiría sincronizar dos fuentes de datos. El orden se obtiene
+ * recorriendo TargetSymbols y consultando AssetCache.
  *
- * ARQUITECTURA:
- *
- * Binance WebSocket
- *        |
- *        v
- * Recepción del mensaje
- *        |
- *        v
- * Transferencia al Game Thread
- *        |
- *        v
- * Procesamiento JSON
- *        |
- *        v
- * Filtro de símbolos
- *        |
- *        v
- * AssetCache
- *        |
- *        v
- * OnCryptoDataUpdated
- *        |
- *        v
- * Actores visuales de Vantage
- *
- * NOTA:
- * La reconexión automática se incorporará en una etapa posterior.
+ * Los mensajes de red se transfieren al Game Thread antes de tocar el estado
+ * del subsistema. Mutex se conserva como protección del caché y de la bandera
+ * de actualización frente a futuras rutas de acceso desde otros hilos.
  */
 UCLASS()
 class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
@@ -163,91 +88,43 @@ class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
 
 public:
 
-    // ============================================================
-    // CICLO DE VIDA DEL SUBSISTEMA
-    // ============================================================
+    // ------------------------------------------------------------
+    // CICLO DE VIDA
+    // ------------------------------------------------------------
 
-    /**
-     * Inicializa el subsistema.
-     *
-     * Se ejecuta cuando Unreal Engine crea el subsistema asociado
-     * al GameInstance.
-     *
-     * Responsabilidades:
-     * - Inicializar la configuración de símbolos.
-     * - Normalizar los símbolos configurados.
-     * - Construir el conjunto de búsqueda AllowedSymbols.
-     * - Configurar el intervalo de actualización.
-     * - Establecer la conexión WebSocket.
-     * - Registrar el ticker periódico.
-     *
-     * @param Collection Colección de subsistemas utilizada por Unreal Engine.
-     */
+    /** Inicializa el catálogo, el filtro, la conexión y el ticker. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-
-    /**
-     * Libera los recursos utilizados por el subsistema.
-     *
-     * Se ejecuta cuando el GameInstance está finalizando
-     * o cuando Unreal Engine destruye el subsistema.
-     *
-     * Responsabilidades:
-     * - Marcar el inicio del cierre.
-     * - Retirar el ticker registrado.
-     * - Cerrar la conexión WebSocket.
-     * - Liberar la referencia al WebSocket.
-     * - Ejecutar la implementación de la clase base.
-     */
+    /** Detiene el ticker y cierra/libera la conexión antes de destruirse. */
     virtual void Deinitialize() override;
 
 
-    // ============================================================
+    // ------------------------------------------------------------
     // EVENTOS PÚBLICOS
-    // ============================================================
+    // ------------------------------------------------------------
 
-    /**
-     * Evento público de actualización de datos financieros.
-     *
-     * Los actores o Blueprints pueden suscribirse a este evento
-     * para recibir información actualizada sin consultar el caché
-     * constantemente en cada frame.
-     */
+    /** Se emite cuando se detecta información nueva de los activos configurados. */
     UPROPERTY(BlueprintAssignable, Category = "Vantage|Events")
     FOnCryptoDataUpdated OnCryptoDataUpdated;
 
 
-    // ============================================================
+    // ------------------------------------------------------------
     // CONFIGURACIÓN PÚBLICA
-    // ============================================================
+    // ------------------------------------------------------------
 
     /**
-     * Catálogo ordenado de símbolos que Vantage debe visualizar.
+     * Catálogo de activos que Vantage debe procesar y visualizar.
      *
-     * Se puede configurar desde el editor o mediante Blueprint.
-     *
-     * El orden de esta lista también determina el orden de salida
-     * de GetOrderedTargetAssets().
-     *
-     * Ejemplo:
-     * BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT...
-     *
-     * Los símbolos se normalizan durante Initialize().
+     * El orden de esta lista determina el orden estable de las consultas
+     * ordenadas y, por lo tanto, el orden utilizado para paginar los slots.
+     * Los símbolos se normalizan y se eliminan duplicados durante Initialize().
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Catalog")
     TArray<FString> TargetSymbols;
 
-
     /**
-     * Intervalo de distribución de actualizaciones, expresado en segundos.
-     *
-     * Ejemplo:
-     * 0.25 segundos = 250 milisegundos.
-     *
-     * Este intervalo regula la frecuencia de emisión del delegado.
-     * No modifica la frecuencia con la que Binance envía sus mensajes.
-     *
-     * El valor se limita internamente al rango de 0.2 a 0.3 segundos.
+     * Intervalo de distribución del delegado, en segundos.
+     * No controla la frecuencia de mensajes enviada por Binance.
      */
     UPROPERTY(
         EditAnywhere,
@@ -258,237 +135,147 @@ public:
     float UpdateInterval = 0.25f;
 
 
-    // ============================================================
+    // ------------------------------------------------------------
     // CONSULTAS PÚBLICAS
-    // ============================================================
+    // ------------------------------------------------------------
 
     /**
-     * Obtiene los datos almacenados para un símbolo específico.
-     *
-     * Realiza una búsqueda por clave dentro de AssetCache mediante TMap::Find().
-     *
-     * La consulta está protegida por Mutex para evitar leer el mapa
-     * mientras otra operación lo está modificando.
-     *
-     * @param Symbol Símbolo que se desea consultar.
-     * @param OutData Estructura donde se copiarán los datos encontrados.
-     *
-     * @return true si el símbolo existe en el caché.
-     * @return false si el símbolo no existe o está vacío.
+     * Busca un activo por símbolo.
+     * @param Symbol Identificador del mercado; se normaliza antes de buscar.
+     * @param OutData Recibe una copia de los datos si el activo existe.
+     * @return true si se encontró el activo; false en caso contrario.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
-    bool GetAssetData(
-        const FString& Symbol,
-        FCryptoAssetData& OutData
-    );
-
+    bool GetAssetData(const FString& Symbol, FCryptoAssetData& OutData);
 
     /**
-     * Devuelve todos los activos actualmente almacenados.
+     * Devuelve los activos recibidos actualmente.
      *
-     * Los elementos se copian desde AssetCache hacia OutAssets.
-     *
-     * IMPORTANTE:
-     * TMap no garantiza un orden específico de iteración.
-     * Si se necesita respetar TargetSymbols, utilizar
-     * GetOrderedTargetAssets().
-     *
-     * @param OutAssets Array que recibirá los activos disponibles.
+     * La salida respeta el orden de TargetSymbols. No incluye placeholders
+     * para símbolos que todavía no recibieron datos.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetAllAssets(TArray<FCryptoAssetData>& OutAssets);
 
-
     /**
-     * Devuelve los activos respetando exactamente el orden de TargetSymbols.
+     * Devuelve todos los símbolos configurados en el orden de TargetSymbols.
      *
-     * Si un activo todavía no recibió datos desde Binance,
-     * se agrega una estructura provisional con su símbolo y valores numéricos
-     * inicializados en cero.
-     *
-     * Esto permite mantener posiciones estables en la interfaz,
-     * incluso cuando algunos activos todavía no tienen cotización.
-     *
-     * @param OutOrderedAssets Array de salida con los activos ordenados.
+     * Si un activo todavía no llegó desde Binance, devuelve una estructura
+     * provisional con el símbolo y sus valores numéricos en cero.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
-    void GetOrderedTargetAssets(
-        TArray<FCryptoAssetData>& OutOrderedAssets
-    );
+    void GetOrderedTargetAssets(TArray<FCryptoAssetData>& OutOrderedAssets);
 
 
 private:
 
-    // ============================================================
-    // FUNCIONES INTERNAS: CONEXIÓN Y RECEPCIÓN
-    // ============================================================
+    // ------------------------------------------------------------
+    // CONEXIÓN Y PROCESAMIENTO DE RED
+    // ------------------------------------------------------------
 
-    /**
-     * Crea e inicia la conexión WebSocket con Binance.
-     *
-     * Registra los callbacks de conexión, error, cierre y recepción
-     * de mensajes antes de iniciar Connect().
-     *
-     * El callback de recepción únicamente transfiere el mensaje
-     * al Game Thread. No procesa directamente el JSON.
-     */
+    /** Crea el cliente WebSocket y registra sus callbacks. */
     void ConnectWebSocket();
 
-
     /**
-     * Procesa un mensaje JSON recibido desde Binance.
-     *
-     * Se ejecuta exclusivamente en el Game Thread.
-     *
-     * Responsabilidades:
-     * - Deserializar el mensaje.
-     * - Recorrer los activos recibidos.
-     * - Filtrar los símbolos permitidos.
-     * - Extraer y convertir los valores numéricos.
-     * - Construir FCryptoAssetData.
-     * - Actualizar AssetCache.
-     * - Marcar que existen datos nuevos.
-     *
-     * Esta función es privada porque el procesamiento de mensajes
-     * es una responsabilidad interna del subsistema.
-     *
-     * @param MessageString Mensaje JSON completo recibido desde Binance.
+     * Procesa un mensaje JSON de Binance.
+     * Esta función se ejecuta exclusivamente en el Game Thread.
      */
     void ProcessWebSocketMessage(const FString& MessageString);
 
 
-    // ============================================================
-    // FUNCIONES INTERNAS: DISTRIBUCIÓN DE DATOS
-    // ============================================================
+    // ------------------------------------------------------------
+    // DISTRIBUCIÓN PERIÓDICA
+    // ------------------------------------------------------------
 
-    /**
-     * Registra el ticker periódico encargado de distribuir actualizaciones.
-     *
-     * Si ya existe un ticker registrado, primero lo elimina
-     * para evitar registrar múltiples instancias.
-     */
+    /** Registra el callback periódico de distribución de datos. */
     void SetupTicker();
 
-
     /**
-     * Callback ejecutado por FTSTicker.
-     *
-     * Comprueba si llegaron datos nuevos desde la última emisión.
-     * Si corresponde, genera una copia del caché y distribuye
-     * el evento OnCryptoDataUpdated.
-     *
-     * @param DeltaTime Tiempo transcurrido desde la última actualización.
-     *
-     * @return true para mantener el ticker activo.
+     * Comprueba si hay datos nuevos y emite el delegado cuando corresponde.
+     * @return true para mantener el ticker registrado.
      */
     bool HandleTicker(float DeltaTime);
 
 
-private:
-
-    // ============================================================
-    // RECURSOS DE CONEXIÓN
-    // ============================================================
+    // ------------------------------------------------------------
+    // CONSTRUCCIÓN DE CONSULTAS ORDENADAS
+    // ------------------------------------------------------------
 
     /**
-     * Referencia al cliente WebSocket utilizado para comunicarse con Binance.
+     * Construye una instantánea siguiendo el orden de TargetSymbols.
      *
-     * Se almacena como TSharedPtr porque el cliente WebSocket
-     * utiliza el sistema de referencias compartidas de Unreal Engine.
+     * IMPORTANTE: el llamador debe mantener Mutex adquirido durante la llamada.
+     * Si bIncludePlaceholders es false, se omiten símbolos sin datos recibidos.
+     * Si es true, se agrega una estructura provisional para cada símbolo faltante.
+     *
+     * Esta función es privada para centralizar la política de orden y evitar
+     * implementar recorridos diferentes en el ticker y en las consultas.
      */
+    void BuildOrderedSnapshot(
+        TArray<FCryptoAssetData>& OutAssets,
+        bool bIncludePlaceholders
+    ) const;
+
+
+private:
+
+    // ------------------------------------------------------------
+    // RECURSOS DE RED
+    // ------------------------------------------------------------
+
+    /** Cliente compartido de WebSocket utilizado para comunicarse con Binance. */
     TSharedPtr<IWebSocket> WebSocket;
 
 
-    // ============================================================
-    // ALMACENAMIENTO Y FILTRADO DE DATOS
-    // ============================================================
+    // ------------------------------------------------------------
+    // ALMACENAMIENTO Y CATÁLOGO
+    // ------------------------------------------------------------
 
     /**
-     * Caché central de activos financieros.
+     * Caché principal: símbolo -> datos actuales.
      *
-     * Clave:
-     * Símbolo del activo, por ejemplo BTCUSDT.
-     *
-     * Valor:
-     * Estructura FCryptoAssetData con los últimos datos recibidos.
-     *
-     * Se utiliza TMap porque permite localizar un activo mediante
-     * su símbolo sin recorrer secuencialmente todos los elementos.
-     *
-     * El acceso está protegido por Mutex.
+     * TMap se conserva porque permite búsquedas rápidas por símbolo. No se usa
+     * su orden interno para la presentación; el orden visible proviene de
+     * TargetSymbols.
      */
     TMap<FString, FCryptoAssetData> AssetCache;
 
-
     /**
-     * Conjunto de símbolos permitidos para el procesamiento de mensajes.
+     * Conjunto de símbolos aceptados por el filtro de entrada.
      *
-     * Se construye una sola vez durante Initialize(), a partir
-     * de TargetSymbols ya normalizado.
-     *
-     * TSet permite comprobar rápidamente si un símbolo pertenece
-     * al catálogo configurado.
-     *
-     * Después de Initialize() se considera de solo lectura.
-     * Si en el futuro permitimos modificar TargetSymbols durante
-     * la ejecución, habrá que reconstruir este conjunto de forma segura.
+     * Se construye una sola vez a partir del catálogo normalizado. No se
+     * reconstruye por mensaje. Se considera de solo lectura después de
+     * Initialize(); los cambios dinámicos del catálogo requerirían una API
+     * específica que actualice ambos contenedores de forma controlada.
      */
     TSet<FString> AllowedSymbols;
 
 
-    // ============================================================
+    // ------------------------------------------------------------
     // SINCRONIZACIÓN
-    // ============================================================
+    // ------------------------------------------------------------
 
     /**
-     * Mutex utilizado para proteger los datos compartidos.
-     *
-     * Protege principalmente:
-     * - AssetCache.
-     * - bNewDataReceived.
-     *
-     * FScopeLock adquiere el bloqueo al entrar en el ámbito
-     * y lo libera automáticamente al salir.
+     * Protege AssetCache y bNewDataReceived.
+     * FScopeLock garantiza que el bloqueo se libere al salir del ámbito.
      */
     FCriticalSection Mutex;
 
 
-    // ============================================================
-    // CONTROL DEL TICKER
-    // ============================================================
+    // ------------------------------------------------------------
+    // TICKER Y ESTADO DEL SUBSISTEMA
+    // ------------------------------------------------------------
 
-    /**
-     * Identificador del ticker registrado en FTSTicker.
-     *
-     * Permite retirar el callback cuando el subsistema finaliza
-     * o cuando se necesita volver a configurar el intervalo.
-     */
+    /** Handle necesario para retirar el callback registrado en FTSTicker. */
     FTSTicker::FDelegateHandle TickerHandle;
 
-
-    // ============================================================
-    // ESTADO INTERNO
-    // ============================================================
-
-    /**
-     * Indica si se recibió al menos una actualización de mercado
-     * desde la última distribución del evento.
-     *
-     * Se modifica y consulta dentro de secciones protegidas por Mutex.
-     *
-     * Su objetivo es evitar emitir actualizaciones cuando no llegaron
-     * datos nuevos desde Binance.
-     */
+    /** Indica que hay datos nuevos pendientes de distribuir. */
     bool bNewDataReceived = false;
 
-
     /**
-     * Indica que el subsistema comenzó su proceso de destrucción.
-     *
-     * Se utiliza para descartar tareas de procesamiento que hayan
-     * quedado pendientes en la cola del Game Thread.
-     *
-     * Se modifica y consulta desde el Game Thread.
+     * Se activa al comenzar Deinitialize().
+     * Las tareas que todavía estén encoladas en el Game Thread descartan
+     * el mensaje cuando detectan esta bandera.
      */
     bool bIsShuttingDown = false;
 };
