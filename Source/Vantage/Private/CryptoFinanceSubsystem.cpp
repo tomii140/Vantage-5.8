@@ -1,15 +1,17 @@
-
 #include "CryptoFinanceSubsystem.h"
 
-// MÛdulo responsable de proporcionar la implementaciÛn WebSocket de Unreal Engine.
+// M√≥dulo responsable de proporcionar la implementaci√≥n WebSocket de Unreal Engine.
 #include "WebSocketsModule.h"
 
-// Proporciona FTSTicker, utilizado para ejecutar actualizaciones periÛdicas.
+// Proporciona FTSTicker, utilizado para ejecutar actualizaciones peri√≥dicas.
 #include "Containers/Ticker.h"
 
-// Herramientas de serializaciÛn y lectura de JSON.
+// Herramientas de serializaci√≥n y lectura de JSON.
 #include "Serialization/JsonSerializer.h"
 #include "Dom/JsonObject.h"
+
+// Permite programar tareas para ejecutarse en un hilo espec√≠fico.
+#include "Async/Async.h"
 
 
 /**
@@ -17,29 +19,29 @@
  *
  * Inicializa el sistema financiero de Vantage.
  *
- * Esta funciÛn es ejecutada por Unreal Engine cuando se crea
+ * Esta funci√≥n es ejecutada por Unreal Engine cuando se crea
  * el subsistema asociado al GameInstance.
  *
  * En esta etapa preparamos todos los recursos necesarios
- * antes de comenzar a recibir informaciÛn del mercado.
+ * antes de comenzar a recibir informaci√≥n del mercado.
  */
 void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
-    // Ejecuta primero la inicializaciÛn correspondiente a UGameInstanceSubsystem.
+    // Ejecuta primero la inicializaci√≥n correspondiente a UGameInstanceSubsystem.
     Super::Initialize(Collection);
 
 
     // ------------------------------------------------------------
-    // 1. CARGA DEL M”DULO WEBSOCKETS
+    // 1. CARGA DEL M√ìDULO WEBSOCKETS
     // ------------------------------------------------------------
 
     /*
-     * Comprueba si el mÛdulo WebSockets ya se encuentra cargado.
+     * Comprueba si el m√≥dulo WebSockets ya se encuentra cargado.
      *
-     * Si todavÌa no est· cargado, lo solicita al administrador
-     * de mÛdulos de Unreal Engine.
+     * Si todav√≠a no est√° cargado, lo solicita al administrador
+     * de m√≥dulos de Unreal Engine.
      *
-     * LoadModuleChecked garantiza que el mÛdulo estÈ disponible
+     * LoadModuleChecked garantiza que el m√≥dulo est√© disponible
      * y genera un error si no puede cargarse.
      */
     if (!FModuleManager::Get().IsModuleLoaded(TEXT("WebSockets")))
@@ -49,15 +51,15 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 
     // ------------------------------------------------------------
-    // 2. CONFIGURACI”N DEL CAT¡LOGO DE ACTIVOS
+    // 2. CONFIGURACI√ìN DEL CAT√ÅLOGO DE ACTIVOS
     // ------------------------------------------------------------
 
     /*
-     * Si no se configuraron sÌmbolos desde el editor,
-     * cargamos una lista inicial de 25 pares de negociaciÛn USDT.
+     * Si no se configuraron s√≠mbolos desde el editor,
+     * cargamos una lista inicial de 25 pares de negociaci√≥n USDT.
      *
      * Si TargetSymbols ya contiene elementos, respetamos
-     * la configuraciÛn existente.
+     * la configuraci√≥n existente.
      *
      * Esta lista representa los activos que Vantage desea visualizar,
      * no todos los activos disponibles en Binance.
@@ -100,14 +102,14 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 
     // ------------------------------------------------------------
-    // 3. NORMALIZACI”N DE SÕMBOLOS
+    // 3. NORMALIZACI√ìN DE S√çMBOLOS
     // ------------------------------------------------------------
 
     /*
-     * Normaliza todos los sÌmbolos para mantener un formato uniforme.
+     * Normaliza todos los s√≠mbolos para mantener un formato uniforme.
      *
      * ToUpper():
-     * Convierte el texto a may˙sculas.
+     * Convierte el texto a may√∫sculas.
      *
      * TrimStartAndEnd():
      * Elimina espacios al principio y al final.
@@ -122,22 +124,16 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 
     // ------------------------------------------------------------
-    // 4. CONSTRUCCI”N DEL CONJUNTO DE B⁄SQUEDA
+    // 4. CONSTRUCCI√ìN DEL CONJUNTO DE B√öSQUEDA
     // ------------------------------------------------------------
 
     /*
-     * AllowedSymbols almacena los sÌmbolos permitidos en un TSet.
+     * AllowedSymbols almacena los s√≠mbolos permitidos en un TSet.
      *
-     * Antes, este conjunto se reconstruÌa en cada mensaje recibido
-     * desde Binance.
+     * Este conjunto se construye una sola vez durante Initialize().
+     * As√≠ evitamos reconstruirlo en cada mensaje recibido desde Binance.
      *
-     * Ahora se construye una sola vez durante Initialize().
-     *
-     * Esto evita realizar el mismo trabajo repetidamente
-     * mientras el WebSocket est· procesando actualizaciones.
-     *
-     * El conjunto se considera de solo lectura despuÈs
-     * de finalizar la inicializaciÛn.
+     * Despu√©s de finalizar la inicializaci√≥n se considera de solo lectura.
      */
     AllowedSymbols.Reset();
 
@@ -151,32 +147,27 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
 
     // ------------------------------------------------------------
-    // 5. CONFIGURACI”N DEL INTERVALO DE ACTUALIZACI”N
+    // 5. CONFIGURACI√ìN DEL INTERVALO DE ACTUALIZACI√ìN
     // ------------------------------------------------------------
 
     /*
      * Limita UpdateInterval al rango de 0.2 a 0.3 segundos.
      *
-     * FMath::Clamp devuelve:
-     * - 0.2 si el valor es inferior a 0.2.
-     * - 0.3 si el valor es superior a 0.3.
-     * - El mismo valor si est· dentro del rango.
-     *
-     * Este intervalo controla la distribuciÛn de actualizaciones
-     * hacia los sistemas visuales.
+     * Este intervalo controla la distribuci√≥n de actualizaciones
+     * hacia los sistemas visuales, no la frecuencia del servidor.
      */
     UpdateInterval = FMath::Clamp(UpdateInterval, 0.2f, 0.3f);
 
 
     // ------------------------------------------------------------
-    // 6. INICIALIZACI”N DE LA CONEXI”N Y DEL TICKER
+    // 6. INICIALIZACI√ìN DE LA CONEXI√ìN Y DEL TICKER
     // ------------------------------------------------------------
 
     /*
-     * Primero iniciamos la conexiÛn con Binance.
+     * Primero iniciamos la conexi√≥n con Binance.
      *
-     * DespuÈs registramos el ticker que distribuir· las actualizaciones
-     * recibidas a los sistemas que estÈn suscritos al delegado.
+     * Despu√©s registramos el ticker que distribuir√° las actualizaciones
+     * recibidas a los sistemas que est√©n suscritos al delegado.
      */
     ConnectWebSocket();
 
@@ -187,14 +178,28 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 /**
  * Deinitialize
  *
- * Libera los recursos del subsistema antes de su destrucciÛn.
+ * Libera los recursos del subsistema antes de su destrucci√≥n.
  *
- * Es importante retirar los callbacks periÛdicos y cerrar
+ * Es importante retirar los callbacks peri√≥dicos y cerrar
  * los recursos de red para evitar que sigan trabajando
- * cuando el GameInstance ya est· finalizando.
+ * cuando el GameInstance ya est√° finalizando.
  */
 void UCryptoFinanceSubsystem::Deinitialize()
 {
+    // ------------------------------------------------------------
+    // 0. MARCAR EL INICIO DE LA DESTRUCCI√ìN
+    // ------------------------------------------------------------
+
+    /*
+     * Esta bandera informa que el subsistema est√° comenzando
+     * su proceso de cierre.
+     *
+     * Las tareas que hayan quedado pendientes en la cola del
+     * Game Thread comprobar√°n esta bandera antes de procesar mensajes.
+     */
+    bIsShuttingDown = true;
+
+
     // ------------------------------------------------------------
     // 1. RETIRAR EL TICKER
     // ------------------------------------------------------------
@@ -202,10 +207,8 @@ void UCryptoFinanceSubsystem::Deinitialize()
     /*
      * Comprobamos si existe un ticker registrado.
      *
-     * Si el handle es v·lido, retiramos su callback del CoreTicker.
-     *
-     * Esto evita que HandleTicker siga intentando ejecutarse
-     * despuÈs de que el subsistema haya comenzado a destruirse.
+     * Si el handle es v√°lido, retiramos su callback del CoreTicker.
+     * Esto evita que HandleTicker contin√∫e ejecut√°ndose durante el cierre.
      */
     if (TickerHandle.IsValid())
     {
@@ -217,20 +220,18 @@ void UCryptoFinanceSubsystem::Deinitialize()
 
 
     // ------------------------------------------------------------
-    // 2. CIERRE DE LA CONEXI”N WEBSOCKET
+    // 2. CIERRE DE LA CONEXI√ìN WEBSOCKET
     // ------------------------------------------------------------
 
     /*
-     * Si existe una referencia v·lida al WebSocket y la conexiÛn
+     * Si existe una referencia v√°lida al WebSocket y la conexi√≥n
      * se encuentra activa, solicitamos su cierre.
      *
-     * Close() solicita finalizar la conexiÛn.
+     * Close() solicita finalizar la conexi√≥n, pero no garantiza
+     * que todos los callbacks pendientes hayan terminado.
      *
-     * Esta operaciÛn no debe interpretarse como una garantÌa
-     * de que todos los callbacks pendientes hayan terminado.
-     *
-     * El manejo completo de callbacks durante la destrucciÛn
-     * ser· una de las siguientes mejoras de seguridad del subsistema.
+     * La validaci√≥n de TWeakObjectPtr y bIsShuttingDown protege
+     * el procesamiento de mensajes que ya estuvieran encolados.
      */
     if (WebSocket.IsValid())
     {
@@ -252,10 +253,10 @@ void UCryptoFinanceSubsystem::Deinitialize()
 /**
  * SetupTicker
  *
- * Registra el callback periÛdico que comprueba si existen
+ * Registra el callback peri√≥dico que comprueba si existen
  * datos nuevos para distribuir a los sistemas visuales.
  *
- * FTSTicker permite ejecutar una funciÛn cada determinado intervalo
+ * FTSTicker permite ejecutar una funci√≥n cada determinado intervalo
  * sin depender del Tick de un Actor.
  */
 void UCryptoFinanceSubsystem::SetupTicker()
@@ -267,8 +268,8 @@ void UCryptoFinanceSubsystem::SetupTicker()
     /*
      * Antes de registrar uno nuevo, comprobamos si ya existe.
      *
-     * Esto evita acumular m˙ltiples callbacks ejecutando
-     * la misma funciÛn.
+     * Esto evita acumular m√∫ltiples callbacks ejecutando
+     * la misma funci√≥n.
      */
     if (TickerHandle.IsValid())
     {
@@ -285,8 +286,8 @@ void UCryptoFinanceSubsystem::SetupTicker()
     /*
      * Volvemos a limitar el intervalo por seguridad.
      *
-     * Esto garantiza que el ticker utilice un valor v·lido
-     * incluso si SetupTicker() se llama desde otra parte del cÛdigo.
+     * Esto garantiza que el ticker utilice un valor v√°lido
+     * incluso si SetupTicker() se llama desde otra parte del c√≥digo.
      */
     const float ClampedInterval = FMath::Clamp(UpdateInterval, 0.2f, 0.3f);
 
@@ -296,11 +297,11 @@ void UCryptoFinanceSubsystem::SetupTicker()
     // ------------------------------------------------------------
 
     /*
-     * AddTicker registra HandleTicker como funciÛn periÛdica.
+     * AddTicker registra HandleTicker como funci√≥n peri√≥dica.
      *
      * CreateUObject vincula el callback con este objeto UObject.
      *
-     * El ticker recibe el tiempo transcurrido desde la actualizaciÛn
+     * El ticker recibe el tiempo transcurrido desde la actualizaci√≥n
      * anterior mediante DeltaTime.
      *
      * Ejemplo:
@@ -322,59 +323,51 @@ void UCryptoFinanceSubsystem::SetupTicker()
  * Crea y conecta el cliente WebSocket con Binance.
  *
  * Se registran los callbacks correspondientes a los diferentes
- * eventos de conexiÛn antes de iniciar la comunicaciÛn.
+ * eventos de conexi√≥n antes de iniciar la comunicaci√≥n.
  *
- * IMPORTANTE:
- * El callback de recepciÛn utiliza una captura de this.
- * En esta versiÛn todavÌa debemos endurecer el ciclo de vida
- * para garantizar que no se ejecute sobre un subsistema destruido.
+ * El callback OnMessage no procesa directamente los datos.
+ * Su √∫nica responsabilidad es transferir el mensaje al Game Thread.
  */
 void UCryptoFinanceSubsystem::ConnectWebSocket()
 {
     // ------------------------------------------------------------
-    // 1. DIRECCI”N DEL SERVIDOR
+    // 1. DIRECCI√ìN DEL SERVIDOR
     // ------------------------------------------------------------
 
     /*
      * Endpoint de Binance para recibir actualizaciones miniTicker
      * de todos los pares del mercado en formato de arreglo JSON.
      *
-     * El filtro AllowedSymbols permite procesar ˙nicamente
+     * El filtro AllowedSymbols permite procesar √∫nicamente
      * los activos configurados en TargetSymbols.
-     *
-     * Actualmente recibimos el flujo general del mercado
-     * y descartamos los sÌmbolos que no necesitamos.
      */
     const FString ServerUrl =
         TEXT("wss://stream.binance.com:9443/ws/!miniTicker@arr");
 
 
     // ------------------------------------------------------------
-    // 2. CREACI”N DEL CLIENTE WEBSOCKET
+    // 2. CREACI√ìN DEL CLIENTE WEBSOCKET
     // ------------------------------------------------------------
 
     /*
      * CreateWebSocket crea una instancia del cliente WebSocket
-     * utilizando el mÛdulo WebSockets de Unreal Engine.
+     * utilizando el m√≥dulo WebSockets de Unreal Engine.
      *
      * La referencia se almacena en el miembro WebSocket
-     * para poder consultar y controlar la conexiÛn posteriormente.
+     * para poder consultar y controlar la conexi√≥n posteriormente.
      */
     WebSocket = FWebSocketsModule::Get().CreateWebSocket(ServerUrl);
 
 
     // ------------------------------------------------------------
-    // 3. CALLBACK: CONEXI”N EXITOSA
+    // 3. CALLBACK: CONEXI√ìN EXITOSA
     // ------------------------------------------------------------
 
     /*
      * OnConnected se ejecuta cuando el cliente logra establecer
-     * correctamente la conexiÛn con Binance.
+     * correctamente la conexi√≥n con Binance.
      *
      * Por ahora registramos el evento en el Output Log.
-     *
-     * M·s adelante podemos utilizar este evento para actualizar
-     * un estado interno de conexiÛn.
      */
     WebSocket->OnConnected().AddLambda([]()
         {
@@ -387,46 +380,42 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
 
 
     // ------------------------------------------------------------
-    // 4. CALLBACK: ERROR DE CONEXI”N
+    // 4. CALLBACK: ERROR DE CONEXI√ìN
     // ------------------------------------------------------------
 
     /*
      * OnConnectionError se ejecuta cuando ocurre un problema
-     * durante el establecimiento de la conexiÛn.
+     * durante el establecimiento de la conexi√≥n.
      *
      * Error contiene el mensaje proporcionado por el cliente WebSocket.
-     *
-     * Actualmente registramos el error para facilitar el diagnÛstico.
-     * TodavÌa no existe un mecanismo de reconexiÛn autom·tica.
+     * Todav√≠a no existe un mecanismo de reconexi√≥n autom√°tica.
      */
     WebSocket->OnConnectionError().AddLambda([](const FString& Error)
         {
             UE_LOG(
                 LogTemp,
                 Error,
-                TEXT("[Vantage] Error de conexiÛn WebSocket: %s"),
+                TEXT("[Vantage] Error de conexi√≥n WebSocket: %s"),
                 *Error
             );
         });
 
 
     // ------------------------------------------------------------
-    // 5. CALLBACK: CONEXI”N CERRADA
+    // 5. CALLBACK: CONEXI√ìN CERRADA
     // ------------------------------------------------------------
 
     /*
-     * OnClosed se ejecuta cuando la conexiÛn WebSocket se cierra.
+     * OnClosed se ejecuta cuando la conexi√≥n WebSocket se cierra.
      *
      * StatusCode:
-     * CÛdigo de cierre informado por el WebSocket.
+     * C√≥digo de cierre informado por el WebSocket.
      *
      * Reason:
-     * DescripciÛn del motivo del cierre.
+     * Descripci√≥n del motivo del cierre.
      *
      * bWasClean:
      * Indica si el cierre fue considerado limpio.
-     *
-     * Este callback permite conocer cu·ndo la conexiÛn deja de estar activa.
      */
     WebSocket->OnClosed().AddLambda(
         [](int32 StatusCode, const FString& Reason, bool bWasClean)
@@ -444,420 +433,514 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
 
 
     // ------------------------------------------------------------
-    // 6. CALLBACK: RECEPCI”N DE MENSAJES
+    // 6. CALLBACK: RECEPCI√ìN DE MENSAJES
     // ------------------------------------------------------------
 
     /*
-     * OnMessage se ejecuta cada vez que el WebSocket recibe
-     * un mensaje de texto desde Binance.
+     * OnMessage puede ejecutarse desde un hilo de red.
      *
-     * MessageString contiene el mensaje JSON completo.
+     * Por eso no accedemos directamente a miembros del subsistema
+     * ni procesamos estructuras del juego dentro de este callback.
      *
-     * El callback realiza las siguientes operaciones:
+     * TWeakObjectPtr:
+     * Referencia d√©bil que permite comprobar si el UObject contin√∫a vivo.
      *
-     * 1. Deserializa el mensaje JSON.
-     * 2. Comprueba que el mensaje sea un arreglo v·lido.
-     * 3. Recorre los activos recibidos.
-     * 4. Extrae los campos necesarios.
-     * 5. Filtra los sÌmbolos que no pertenecen a AllowedSymbols.
-     * 6. Construye FCryptoAssetData.
-     * 7. Actualiza AssetCache.
-     * 8. Marca que existen datos nuevos para distribuir.
+     * AsyncTask:
+     * Programa una tarea para ejecutarse en el hilo especificado.
      *
-     * NOTA DE CONCURRENCIA:
-     * No asumimos aquÌ que el callback se ejecute en el GameThread.
-     * Por eso el acceso al cachÈ y a la bandera se protege con Mutex.
-     *
-     * La captura [this] sigue siendo un punto pendiente de endurecimiento
-     * para el cierre del subsistema.
+     * ENamedThreads::GameThread:
+     * Indica que el procesamiento JSON se realizar√° en el hilo principal.
      */
-    WebSocket->OnMessage().AddLambda([this](const FString& MessageString)
+
+    // Creamos una referencia d√©bil al subsistema actual.
+    TWeakObjectPtr<UCryptoFinanceSubsystem> WeakThis(this);
+
+
+    WebSocket->OnMessage().AddLambda(
+        [WeakThis](const FString& MessageString)
         {
-            // --------------------------------------------------------
-            // 6.1. PREPARAR EL CONTENEDOR JSON
-            // --------------------------------------------------------
-
             /*
-             * Binance envÌa el stream !miniTicker@arr como un arreglo JSON.
-             *
-             * Cada elemento del arreglo representa un par de mercado.
-             *
-             * TSharedPtr<FJsonValue> permite almacenar los valores
-             * JSON recibidos mediante el sistema de referencias compartidas.
+             * El callback de red solamente transfiere el mensaje.
+             * No consulta AllowedSymbols, AssetCache ni Mutex.
              */
-            TArray<TSharedPtr<FJsonValue>> JsonArray;
-
-
-            // Creamos un lector para interpretar el texto recibido.
-            TSharedRef<TJsonReader<>> Reader =
-                TJsonReaderFactory<>::Create(MessageString);
-
-
-            // --------------------------------------------------------
-            // 6.2. DESERIALIZAR EL MENSAJE
-            // --------------------------------------------------------
-
-            /*
-             * Deserialize transforma el texto JSON en estructuras
-             * que Unreal Engine puede consultar desde C++.
-             *
-             * Si el mensaje no representa un arreglo JSON v·lido,
-             * abandonamos el procesamiento.
-             */
-            if (!FJsonSerializer::Deserialize(Reader, JsonArray))
-            {
-                UE_LOG(
-                    LogTemp,
-                    Warning,
-                    TEXT("[Vantage] No se pudo deserializar un mensaje de Binance.")
-                );
-
-                return;
-            }
-
-
-            // --------------------------------------------------------
-            // 6.3. PREPARAR EL ESTADO DE ACTUALIZACI”N
-            // --------------------------------------------------------
-
-            /*
-             * Indica si este mensaje contenÌa al menos un activo
-             * que perteneciera al cat·logo configurado.
-             *
-             * Solo marcamos bNewDataReceived si realmente modificamos
-             * el cachÈ con informaciÛn relevante.
-             */
-            bool bUpdatedAny = false;
-
-
-            // --------------------------------------------------------
-            // 6.4. PROTEGER EL ACCESO AL CACH…
-            // --------------------------------------------------------
-
-            /*
-             * FScopeLock adquiere Mutex al entrar en este ·mbito.
-             *
-             * Mientras el bloqueo estÈ activo, otras funciones que
-             * utilicen el mismo Mutex no podr·n acceder simult·neamente
-             * a AssetCache ni a bNewDataReceived.
-             *
-             * El bloqueo se libera autom·ticamente al finalizar
-             * el callback o al salir del ·mbito.
-             */
-            {
-                FScopeLock Lock(&Mutex);
-
-
-                // ----------------------------------------------------
-                // 6.5. RECORRER LOS ACTIVOS DEL MENSAJE
-                // ----------------------------------------------------
-
-                for (const TSharedPtr<FJsonValue>& Value : JsonArray)
+            AsyncTask(
+                ENamedThreads::GameThread,
+                [WeakThis, MessageString]()
                 {
-                    /*
-                     * Comprobamos que el valor JSON sea v·lido
-                     * antes de intentar interpretarlo como objeto.
-                     */
-                    if (!Value.IsValid())
-                    {
-                        continue;
-                    }
-
-
-                    /*
-                     * Cada elemento del arreglo deberÌa ser un objeto JSON.
-                     *
-                     * AsObject() devuelve una referencia compartida al objeto
-                     * cuando el tipo recibido es compatible.
-                     */
-                    const TSharedPtr<FJsonObject> JsonObject = Value->AsObject();
-
-
-                    // Ignoramos elementos que no sean objetos v·lidos.
-                    if (!JsonObject.IsValid())
-                    {
-                        continue;
-                    }
-
-
                     // ------------------------------------------------
-                    // 6.6. EXTRAER EL SÕMBOLO
+                    // 6.1. VALIDAR LA EXISTENCIA DEL SUBSISTEMA
                     // ------------------------------------------------
 
                     /*
-                     * El campo "s" identifica el par de negociaciÛn.
+                     * El subsistema podr√≠a haber sido destruido
+                     * mientras la tarea esperaba su ejecuci√≥n.
                      *
-                     * Ejemplo:
-                     * "s": "BTCUSDT"
-                     *
-                     * TryGetStringField permite comprobar que el campo
-                     * exista y sea una cadena v·lida antes de utilizarlo.
+                     * Si la referencia d√©bil ya no es v√°lida,
+                     * descartamos el mensaje.
                      */
-                    FString Symbol;
-
-                    if (!JsonObject->TryGetStringField(TEXT("s"), Symbol))
+                    if (!WeakThis.IsValid())
                     {
-                        continue;
+                        return;
                     }
 
 
-                    // Normalizamos el identificador recibido.
-                    Symbol = Symbol.ToUpper().TrimStartAndEnd();
+                    // Recuperamos el puntero al subsistema.
+                    UCryptoFinanceSubsystem* Subsystem = WeakThis.Get();
 
 
-                    // Si el sÌmbolo est· vacÌo, no podemos identificar el activo.
-                    if (Symbol.IsEmpty())
+                    // ------------------------------------------------
+                    // 6.2. VALIDAR EL ESTADO DE DESTRUCCI√ìN
+                    // ------------------------------------------------
+
+                    /*
+                     * El objeto puede seguir existiendo mientras
+                     * su proceso de cierre ya haya comenzado.
+                     *
+                     * En ese caso tampoco debemos procesar el mensaje.
+                     */
+                    if (!Subsystem || Subsystem->bIsShuttingDown)
                     {
-                        continue;
+                        return;
                     }
 
 
                     // ------------------------------------------------
-                    // 6.7. FILTRAR LOS SÕMBOLOS
+                    // 6.3. DELEGAR EL PROCESAMIENTO JSON
                     // ------------------------------------------------
 
                     /*
-                     * AllowedSymbols contiene los sÌmbolos que Vantage
-                     * desea almacenar y visualizar.
+                     * La funci√≥n privada centraliza el procesamiento
+                     * del mensaje y mantiene separadas las responsabilidades:
                      *
-                     * Contains comprueba si el sÌmbolo recibido pertenece
-                     * al conjunto permitido.
-                     *
-                     * Si no pertenece, descartamos el activo.
-                     *
-                     * Este conjunto se construyÛ durante Initialize(),
-                     * por lo que no necesitamos reconstruirlo en cada mensaje.
+                     * - Callback WebSocket: recepci√≥n y transferencia.
+                     * - ProcessWebSocketMessage: an√°lisis y almacenamiento.
                      */
-                    if (AllowedSymbols.Num() > 0 &&
-                        !AllowedSymbols.Contains(Symbol))
-                    {
-                        continue;
-                    }
-
-
-                    // ------------------------------------------------
-                    // 6.8. EXTRAER LOS VALORES NUM…RICOS
-                    // ------------------------------------------------
-
-                    /*
-                     * Binance entrega los valores numÈricos del miniTicker
-                     * como cadenas de texto.
-                     *
-                     * TryGetStringField evita intentar convertir campos
-                     * que no existen o que tienen un tipo incorrecto.
-                     *
-                     * Campos utilizados:
-                     *
-                     * c = ⁄ltimo precio.
-                     * o = Precio de apertura del perÌodo.
-                     * h = Precio m·ximo.
-                     * l = Precio mÌnimo.
-                     * v = Volumen negociado.
-                     */
-                    FString LastPriceString;
-                    FString OpenPriceString;
-                    FString HighPriceString;
-                    FString LowPriceString;
-                    FString VolumeString;
-
-
-                    const bool bHasLastPrice =
-                        JsonObject->TryGetStringField(TEXT("c"), LastPriceString);
-
-                    const bool bHasOpenPrice =
-                        JsonObject->TryGetStringField(TEXT("o"), OpenPriceString);
-
-                    const bool bHasHighPrice =
-                        JsonObject->TryGetStringField(TEXT("h"), HighPriceString);
-
-                    const bool bHasLowPrice =
-                        JsonObject->TryGetStringField(TEXT("l"), LowPriceString);
-
-                    const bool bHasVolume =
-                        JsonObject->TryGetStringField(TEXT("v"), VolumeString);
-
-
-                    /*
-                     * Si falta alguno de los campos esenciales,
-                     * descartamos el registro para evitar almacenar
-                     * informaciÛn incompleta como si fuera v·lida.
-                     */
-                    if (!bHasLastPrice ||
-                        !bHasOpenPrice ||
-                        !bHasHighPrice ||
-                        !bHasLowPrice ||
-                        !bHasVolume)
-                    {
-                        continue;
-                    }
-
-
-                    // ------------------------------------------------
-                    // 6.9. CONVERTIR TEXTO A DOUBLE
-                    // ------------------------------------------------
-
-                    /*
-                     * FCString::Atod convierte una cadena numÈrica
-                     * en un valor de tipo double.
-                     *
-                     * Utilizamos double para conservar precisiÛn decimal
-                     * en los precios y vol˙menes.
-                     *
-                     * La validaciÛn de rangos y valores numÈricos inv·lidos
-                     * ser· una mejora adicional del procesamiento de datos.
-                     */
-                    const double LastPrice = FCString::Atod(*LastPriceString);
-                    const double OpenPrice = FCString::Atod(*OpenPriceString);
-                    const double HighPrice = FCString::Atod(*HighPriceString);
-                    const double LowPrice = FCString::Atod(*LowPriceString);
-                    const double Volume = FCString::Atod(*VolumeString);
-
-
-                    // ------------------------------------------------
-                    // 6.10. CONSTRUIR LA ESTRUCTURA DEL ACTIVO
-                    // ------------------------------------------------
-
-                    /*
-                     * Creamos una estructura FCryptoAssetData.
-                     *
-                     * Esta estructura agrupa todos los valores necesarios
-                     * para representar el estado actual del activo.
-                     */
-                    FCryptoAssetData AssetData;
-
-
-                    // Identificador del mercado.
-                    AssetData.Symbol = Symbol;
-
-                    // ⁄ltimo precio informado.
-                    AssetData.LastPrice = LastPrice;
-
-                    // Precio m·ximo.
-                    AssetData.HighPrice = HighPrice;
-
-                    // Precio mÌnimo.
-                    AssetData.LowPrice = LowPrice;
-
-                    // Volumen negociado.
-                    AssetData.Volume = Volume;
-
-
-                    // ------------------------------------------------
-                    // 6.11. CALCULAR VARIACIONES DE PRECIO
-                    // ------------------------------------------------
-
-                    /*
-                     * VariaciÛn absoluta:
-                     *
-                     * ⁄ltimo precio - Precio de apertura.
-                     *
-                     * Un resultado positivo indica una variaciÛn al alza.
-                     * Un resultado negativo indica una variaciÛn a la baja.
-                     */
-                    AssetData.PriceChange = LastPrice - OpenPrice;
-
-
-                    /*
-                     * VariaciÛn porcentual:
-                     *
-                     * ((⁄ltimo precio - Precio de apertura) / Precio de apertura) * 100.
-                     *
-                     * Evitamos dividir por cero cuando OpenPrice no es positivo.
-                     */
-                    AssetData.PriceChangePercent = (OpenPrice > 0.0)
-                        ? ((LastPrice - OpenPrice) / OpenPrice) * 100.0
-                        : 0.0;
-
-
-                    // ------------------------------------------------
-                    // 6.12. ACTUALIZAR EL CACH…
-                    // ------------------------------------------------
-
-                    /*
-                     * Add almacena AssetData utilizando Symbol como clave.
-                     *
-                     * Si el sÌmbolo todavÌa no existe, se agrega una entrada.
-                     *
-                     * Si ya existe, se reemplaza su valor anterior.
-                     *
-                     * De esta manera AssetCache mantiene la ˙ltima informaciÛn
-                     * disponible para cada par de mercado.
-                     */
-                    AssetCache.Add(Symbol, AssetData);
-
-
-                    // Indicamos que el mensaje modificÛ informaciÛn relevante.
-                    bUpdatedAny = true;
+                    Subsystem->ProcessWebSocketMessage(MessageString);
                 }
-
-
-                // ----------------------------------------------------
-                // 6.13. MARCAR QUE EXISTEN DATOS NUEVOS
-                // ----------------------------------------------------
-
-                /*
-                 * Si al menos un activo fue actualizado,
-                 * activamos la bandera de notificaciÛn.
-                 *
-                 * HandleTicker consultar· esta bandera posteriormente
-                 * para determinar si debe emitir OnCryptoDataUpdated.
-                 */
-                if (bUpdatedAny)
-                {
-                    bNewDataReceived = true;
-                }
-            }
-
-            /*
-             * Al finalizar este bloque, FScopeLock libera Mutex.
-             *
-             * AsÌ otras funciones del subsistema pueden volver
-             * a consultar o modificar AssetCache.
-             */
-        });
+            );
+        }
+    );
 
 
     // ------------------------------------------------------------
-    // 7. INICIAR LA CONEXI”N
+    // 7. INICIAR LA CONEXI√ìN
     // ------------------------------------------------------------
 
     /*
-     * Connect inicia el proceso de conexiÛn con Binance.
+     * Connect inicia el proceso de conexi√≥n con Binance.
      *
      * Los callbacks ya fueron registrados, por lo que el sistema
-     * puede recibir los eventos de conexiÛn y mensajes.
+     * puede recibir los eventos de conexi√≥n y mensajes.
      */
     WebSocket->Connect();
 }
 
 
 /**
+ * ProcessWebSocketMessage
+ *
+ * Procesa un mensaje JSON recibido desde Binance.
+ *
+ * Esta funci√≥n se ejecuta exclusivamente en el Game Thread.
+ *
+ * RESPONSABILIDADES:
+ *
+ * 1. Deserializar el mensaje JSON.
+ * 2. Comprobar que el mensaje sea un arreglo v√°lido.
+ * 3. Recorrer los activos recibidos.
+ * 4. Extraer los campos necesarios.
+ * 5. Filtrar los s√≠mbolos que no pertenecen a AllowedSymbols.
+ * 6. Construir FCryptoAssetData.
+ * 7. Actualizar AssetCache.
+ * 8. Marcar que existen datos nuevos para distribuir.
+ *
+ * La funci√≥n mantiene el Mutex para conservar la protecci√≥n
+ * del cach√© y de bNewDataReceived frente a otras posibles rutas
+ * de lectura o escritura del subsistema.
+ *
+ * @param MessageString Mensaje JSON completo recibido desde Binance.
+ */
+void UCryptoFinanceSubsystem::ProcessWebSocketMessage(
+    const FString& MessageString
+)
+{
+    // ------------------------------------------------------------
+    // 1. PREPARAR EL CONTENEDOR JSON
+    // ------------------------------------------------------------
+
+    /*
+     * Binance env√≠a el stream !miniTicker@arr como un arreglo JSON.
+     *
+     * Cada elemento del arreglo representa un par de mercado.
+     *
+     * TSharedPtr<FJsonValue> permite almacenar los valores
+     * JSON recibidos mediante el sistema de referencias compartidas.
+     */
+    TArray<TSharedPtr<FJsonValue>> JsonArray;
+
+
+    // Creamos un lector para interpretar el texto recibido.
+    TSharedRef<TJsonReader<>> Reader =
+        TJsonReaderFactory<>::Create(MessageString);
+
+
+    // ------------------------------------------------------------
+    // 2. DESERIALIZAR EL MENSAJE
+    // ------------------------------------------------------------
+
+    /*
+     * Deserialize transforma el texto JSON en estructuras
+     * que Unreal Engine puede consultar desde C++.
+     *
+     * Si el mensaje no representa un arreglo JSON v√°lido,
+     * abandonamos el procesamiento.
+     */
+    if (!FJsonSerializer::Deserialize(Reader, JsonArray))
+    {
+        UE_LOG(
+            LogTemp,
+            Warning,
+            TEXT("[Vantage] No se pudo deserializar un mensaje de Binance.")
+        );
+
+        return;
+    }
+
+
+    // ------------------------------------------------------------
+    // 3. PREPARAR EL ESTADO DE ACTUALIZACI√ìN
+    // ------------------------------------------------------------
+
+    /*
+     * Indica si este mensaje conten√≠a al menos un activo
+     * que perteneciera al cat√°logo configurado.
+     *
+     * Solo marcamos bNewDataReceived si realmente modificamos
+     * el cach√© con informaci√≥n relevante.
+     */
+    bool bUpdatedAny = false;
+
+
+    // ------------------------------------------------------------
+    // 4. PROTEGER EL ACCESO AL CACH√â
+    // ------------------------------------------------------------
+
+    /*
+     * FScopeLock adquiere Mutex al entrar en este √°mbito.
+     *
+     * Mientras el bloqueo est√© activo, otras funciones que
+     * utilicen el mismo Mutex no podr√°n acceder simult√°neamente
+     * a AssetCache ni a bNewDataReceived.
+     *
+     * El bloqueo se libera autom√°ticamente al salir del √°mbito.
+     */
+    {
+        FScopeLock Lock(&Mutex);
+
+
+        // --------------------------------------------------------
+        // 5. RECORRER LOS ACTIVOS DEL MENSAJE
+        // --------------------------------------------------------
+
+        for (const TSharedPtr<FJsonValue>& Value : JsonArray)
+        {
+            /*
+             * Comprobamos que el valor JSON sea v√°lido
+             * antes de intentar interpretarlo como objeto.
+             */
+            if (!Value.IsValid())
+            {
+                continue;
+            }
+
+
+            /*
+             * Cada elemento del arreglo deber√≠a ser un objeto JSON.
+             *
+             * AsObject() devuelve una referencia compartida al objeto
+             * cuando el tipo recibido es compatible.
+             */
+            const TSharedPtr<FJsonObject> JsonObject = Value->AsObject();
+
+
+            // Ignoramos elementos que no sean objetos v√°lidos.
+            if (!JsonObject.IsValid())
+            {
+                continue;
+            }
+
+
+            // ----------------------------------------------------
+            // 6. EXTRAER EL S√çMBOLO
+            // ----------------------------------------------------
+
+            /*
+             * El campo "s" identifica el par de negociaci√≥n.
+             *
+             * Ejemplo:
+             * "s": "BTCUSDT"
+             *
+             * TryGetStringField permite comprobar que el campo
+             * exista y sea una cadena v√°lida antes de utilizarlo.
+             */
+            FString Symbol;
+
+            if (!JsonObject->TryGetStringField(TEXT("s"), Symbol))
+            {
+                continue;
+            }
+
+
+            // Normalizamos el identificador recibido.
+            Symbol = Symbol.ToUpper().TrimStartAndEnd();
+
+
+            // Si el s√≠mbolo est√° vac√≠o, no podemos identificar el activo.
+            if (Symbol.IsEmpty())
+            {
+                continue;
+            }
+
+
+            // ----------------------------------------------------
+            // 7. FILTRAR LOS S√çMBOLOS
+            // ----------------------------------------------------
+
+            /*
+             * AllowedSymbols contiene los s√≠mbolos que Vantage
+             * desea almacenar y visualizar.
+             *
+             * Contains comprueba si el s√≠mbolo recibido pertenece
+             * al conjunto permitido.
+             *
+             * Si no pertenece, descartamos el activo.
+             *
+             * Este conjunto se construy√≥ durante Initialize(),
+             * por lo que no necesitamos reconstruirlo en cada mensaje.
+             */
+            if (AllowedSymbols.Num() > 0 &&
+                !AllowedSymbols.Contains(Symbol))
+            {
+                continue;
+            }
+
+
+            // ----------------------------------------------------
+            // 8. EXTRAER LOS VALORES NUM√âRICOS
+            // ----------------------------------------------------
+
+            /*
+             * Binance entrega los valores num√©ricos del miniTicker
+             * como cadenas de texto.
+             *
+             * TryGetStringField evita intentar convertir campos
+             * que no existen o que tienen un tipo incorrecto.
+             *
+             * Campos utilizados:
+             *
+             * c = √öltimo precio.
+             * o = Precio de apertura del per√≠odo.
+             * h = Precio m√°ximo.
+             * l = Precio m√≠nimo.
+             * v = Volumen negociado.
+             */
+            FString LastPriceString;
+            FString OpenPriceString;
+            FString HighPriceString;
+            FString LowPriceString;
+            FString VolumeString;
+
+
+            const bool bHasLastPrice =
+                JsonObject->TryGetStringField(TEXT("c"), LastPriceString);
+
+            const bool bHasOpenPrice =
+                JsonObject->TryGetStringField(TEXT("o"), OpenPriceString);
+
+            const bool bHasHighPrice =
+                JsonObject->TryGetStringField(TEXT("h"), HighPriceString);
+
+            const bool bHasLowPrice =
+                JsonObject->TryGetStringField(TEXT("l"), LowPriceString);
+
+            const bool bHasVolume =
+                JsonObject->TryGetStringField(TEXT("v"), VolumeString);
+
+
+            /*
+             * Si falta alguno de los campos esenciales,
+             * descartamos el registro para evitar almacenar
+             * informaci√≥n incompleta como si fuera v√°lida.
+             */
+            if (!bHasLastPrice ||
+                !bHasOpenPrice ||
+                !bHasHighPrice ||
+                !bHasLowPrice ||
+                !bHasVolume)
+            {
+                continue;
+            }
+
+
+            // ----------------------------------------------------
+            // 9. CONVERTIR TEXTO A DOUBLE
+            // ----------------------------------------------------
+
+            /*
+             * FCString::Atod convierte una cadena num√©rica
+             * en un valor de tipo double.
+             *
+             * Utilizamos double para conservar precisi√≥n decimal
+             * en los precios y vol√∫menes.
+             *
+             * La validaci√≥n de rangos y valores num√©ricos inv√°lidos
+             * ser√° una mejora adicional del procesamiento de datos.
+             */
+            const double LastPrice = FCString::Atod(*LastPriceString);
+            const double OpenPrice = FCString::Atod(*OpenPriceString);
+            const double HighPrice = FCString::Atod(*HighPriceString);
+            const double LowPrice = FCString::Atod(*LowPriceString);
+            const double Volume = FCString::Atod(*VolumeString);
+
+
+            // ----------------------------------------------------
+            // 10. CONSTRUIR LA ESTRUCTURA DEL ACTIVO
+            // ----------------------------------------------------
+
+            /*
+             * Creamos una estructura FCryptoAssetData.
+             *
+             * Esta estructura agrupa todos los valores necesarios
+             * para representar el estado actual del activo.
+             */
+            FCryptoAssetData AssetData;
+
+
+            // Identificador del mercado.
+            AssetData.Symbol = Symbol;
+
+            // √öltimo precio informado.
+            AssetData.LastPrice = LastPrice;
+
+            // Precio m√°ximo.
+            AssetData.HighPrice = HighPrice;
+
+            // Precio m√≠nimo.
+            AssetData.LowPrice = LowPrice;
+
+            // Volumen negociado.
+            AssetData.Volume = Volume;
+
+
+            // ----------------------------------------------------
+            // 11. CALCULAR VARIACIONES DE PRECIO
+            // ----------------------------------------------------
+
+            /*
+             * Variaci√≥n absoluta:
+             *
+             * √öltimo precio - Precio de apertura.
+             *
+             * Un resultado positivo indica una variaci√≥n al alza.
+             * Un resultado negativo indica una variaci√≥n a la baja.
+             */
+            AssetData.PriceChange = LastPrice - OpenPrice;
+
+
+            /*
+             * Variaci√≥n porcentual:
+             *
+             * ((√öltimo precio - Precio de apertura) / Precio de apertura) * 100.
+             *
+             * Evitamos dividir por cero cuando OpenPrice no es positivo.
+             */
+            AssetData.PriceChangePercent = (OpenPrice > 0.0)
+                ? ((LastPrice - OpenPrice) / OpenPrice) * 100.0
+                : 0.0;
+
+
+            // ----------------------------------------------------
+            // 12. ACTUALIZAR EL CACH√â
+            // ----------------------------------------------------
+
+            /*
+             * Add almacena AssetData utilizando Symbol como clave.
+             *
+             * Si el s√≠mbolo todav√≠a no existe, se agrega una entrada.
+             *
+             * Si ya existe, se reemplaza su valor anterior.
+             *
+             * De esta manera AssetCache mantiene la √∫ltima informaci√≥n
+             * disponible para cada par de mercado.
+             */
+            AssetCache.Add(Symbol, AssetData);
+
+
+            // Indicamos que el mensaje modific√≥ informaci√≥n relevante.
+            bUpdatedAny = true;
+        }
+
+
+        // --------------------------------------------------------
+        // 13. MARCAR QUE EXISTEN DATOS NUEVOS
+        // --------------------------------------------------------
+
+        /*
+         * Si al menos un activo fue actualizado,
+         * activamos la bandera de notificaci√≥n.
+         *
+         * HandleTicker consultar√° esta bandera posteriormente
+         * para determinar si debe emitir OnCryptoDataUpdated.
+         */
+        if (bUpdatedAny)
+        {
+            bNewDataReceived = true;
+        }
+    }
+
+    /*
+     * Al finalizar este bloque, FScopeLock libera Mutex.
+     *
+     * As√≠ otras funciones del subsistema pueden volver
+     * a consultar o modificar AssetCache.
+     */
+}
+
+
+/**
  * HandleTicker
  *
- * Se ejecuta periÛdicamente mediante FTSTicker.
+ * Se ejecuta peri√≥dicamente mediante FTSTicker.
  *
- * Su responsabilidad es comprobar si el subsistema recibiÛ
+ * Su responsabilidad es comprobar si el subsistema recibi√≥
  * nuevos datos desde Binance y, si corresponde, distribuirlos
  * mediante OnCryptoDataUpdated.
  *
- * La emisiÛn se realiza fuera del bloqueo Mutex para evitar
- * mantener bloqueado el cachÈ mientras otros sistemas ejecutan
+ * La emisi√≥n se realiza fuera del bloqueo Mutex para evitar
+ * mantener bloqueado el cach√© mientras otros sistemas ejecutan
  * sus propias funciones al recibir el delegado.
  *
- * @param DeltaTime Tiempo transcurrido desde la ˙ltima ejecuciÛn.
+ * @param DeltaTime Tiempo transcurrido desde la √∫ltima ejecuci√≥n.
  *
  * @return true para mantener el ticker registrado.
  */
 bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
 {
-    // Indica si debemos emitir una actualizaciÛn.
+    // Evitamos distribuir datos si el subsistema est√° cerr√°ndose.
+    if (bIsShuttingDown)
+    {
+        return false;
+    }
+
+
+    // Indica si debemos emitir una actualizaci√≥n.
     bool bShouldBroadcast = false;
 
 
     /*
-     * SnapshotList almacena una copia de los datos del cachÈ.
+     * SnapshotList almacena una copia de los datos del cach√©.
      *
-     * El tÈrmino Snapshot hace referencia a una fotografÌa
+     * El t√©rmino Snapshot hace referencia a una fotograf√≠a
      * del estado de los activos en un momento determinado.
      */
     TArray<FCryptoAssetData> SnapshotList;
@@ -869,20 +952,20 @@ bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
 
     {
         /*
-         * Protegemos la lectura de la bandera y la copia del cachÈ.
+         * Protegemos la lectura de la bandera y la copia del cach√©.
          *
-         * De esta manera el callback WebSocket no puede modificar
-         * AssetCache mientras estamos generando SnapshotList.
+         * De esta manera ninguna otra operaci√≥n protegida por Mutex
+         * puede modificar AssetCache mientras generamos SnapshotList.
          */
         FScopeLock Lock(&Mutex);
 
 
         if (bNewDataReceived)
         {
-            // Consumimos la notificaciÛn pendiente.
+            // Consumimos la notificaci√≥n pendiente.
             bNewDataReceived = false;
 
-            // Confirmamos que existe una actualizaciÛn para distribuir.
+            // Confirmamos que existe una actualizaci√≥n para distribuir.
             bShouldBroadcast = true;
 
 
@@ -890,7 +973,7 @@ bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
              * GenerateValueArray copia los valores del TMap
              * dentro del array de salida.
              *
-             * El orden de los elementos no est· garantizado.
+             * El orden de los elementos no est√° garantizado.
              */
             AssetCache.GenerateValueArray(SnapshotList);
         }
@@ -905,7 +988,7 @@ bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
      * Emitimos el evento fuera del bloqueo.
      *
      * Esto es importante porque los objetos suscritos al delegado
-     * pueden ejecutar operaciones adicionales al recibir la actualizaciÛn.
+     * pueden ejecutar operaciones adicionales al recibir la actualizaci√≥n.
      *
      * No queremos mantener Mutex bloqueado durante esas operaciones.
      */
@@ -926,18 +1009,18 @@ bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
 /**
  * GetAssetData
  *
- * Busca un activo especÌfico dentro del cachÈ.
+ * Busca un activo espec√≠fico dentro del cach√©.
  *
- * Utiliza TMap::Find() para realizar una b˙squeda por clave.
+ * Utiliza TMap::Find() para realizar una b√∫squeda por clave.
  *
- * Esta funciÛn es ˙til cuando un actor necesita consultar
- * un ˙nico activo sin copiar toda la colecciÛn.
+ * Esta funci√≥n es √∫til cuando un actor necesita consultar
+ * un √∫nico activo sin copiar toda la colecci√≥n.
  *
- * @param Symbol SÌmbolo que identifica al activo.
- * @param OutData Estructura donde se copiar·n los datos encontrados.
+ * @param Symbol S√≠mbolo que identifica al activo.
+ * @param OutData Estructura donde se copiar√°n los datos encontrados.
  *
  * @return true si el activo existe.
- * @return false si no existe o el sÌmbolo est· vacÌo.
+ * @return false si no existe o el s√≠mbolo est√° vac√≠o.
  */
 bool UCryptoFinanceSubsystem::GetAssetData(
     const FString& Symbol,
@@ -949,14 +1032,14 @@ bool UCryptoFinanceSubsystem::GetAssetData(
     // ------------------------------------------------------------
 
     /*
-     * Normalizamos el sÌmbolo recibido para que coincida
+     * Normalizamos el s√≠mbolo recibido para que coincida
      * con las claves almacenadas en AssetCache.
      */
     const FString NormalizedSymbol =
         Symbol.ToUpper().TrimStartAndEnd();
 
 
-    // No podemos buscar una clave vacÌa.
+    // No podemos buscar una clave vac√≠a.
     if (NormalizedSymbol.IsEmpty())
     {
         return false;
@@ -964,12 +1047,12 @@ bool UCryptoFinanceSubsystem::GetAssetData(
 
 
     // ------------------------------------------------------------
-    // 2. BUSCAR EL ACTIVO EN EL CACH…
+    // 2. BUSCAR EL ACTIVO EN EL CACH√â
     // ------------------------------------------------------------
 
     /*
-     * Protegemos la b˙squeda porque AssetCache puede estar
-     * siendo actualizado desde el callback WebSocket.
+     * Protegemos la b√∫squeda porque AssetCache puede estar
+     * siendo actualizado desde otra operaci√≥n del subsistema.
      */
     FScopeLock Lock(&Mutex);
 
@@ -990,7 +1073,7 @@ bool UCryptoFinanceSubsystem::GetAssetData(
     }
 
 
-    // El sÌmbolo no se encuentra almacenado.
+    // El s√≠mbolo no se encuentra almacenado.
     return false;
 }
 
@@ -1002,12 +1085,12 @@ bool UCryptoFinanceSubsystem::GetAssetData(
  * hacia el array proporcionado por el consumidor.
  *
  * IMPORTANTE:
- * El orden de salida no est· garantizado porque AssetCache
+ * El orden de salida no est√° garantizado porque AssetCache
  * utiliza TMap como estructura de almacenamiento.
  *
  * Para obtener un orden estable, utilizar GetOrderedTargetAssets().
  *
- * @param OutAssets Array donde se almacenar·n los activos.
+ * @param OutAssets Array donde se almacenar√°n los activos.
  */
 void UCryptoFinanceSubsystem::GetAllAssets(
     TArray<FCryptoAssetData>& OutAssets
@@ -1018,7 +1101,7 @@ void UCryptoFinanceSubsystem::GetAllAssets(
 
 
     /*
-     * Protegemos la lectura del cachÈ mientras generamos
+     * Protegemos la lectura del cach√© mientras generamos
      * la copia de sus valores.
      */
     FScopeLock Lock(&Mutex);
@@ -1027,7 +1110,7 @@ void UCryptoFinanceSubsystem::GetAllAssets(
     /*
      * GenerateValueArray copia todos los valores del TMap.
      *
-     * No copia las claves porque los sÌmbolos ya est·n incluidos
+     * No copia las claves porque los s√≠mbolos ya est√°n incluidos
      * dentro de FCryptoAssetData::Symbol.
      */
     AssetCache.GenerateValueArray(OutAssets);
@@ -1040,14 +1123,14 @@ void UCryptoFinanceSubsystem::GetAllAssets(
  * Devuelve los activos respetando el orden configurado
  * en TargetSymbols.
  *
- * Esta funciÛn es especialmente ˙til para ACryptoTerminalActor,
+ * Esta funci√≥n es especialmente √∫til para ACryptoTerminalActor,
  * ya que permite paginar los activos sin depender del orden
  * interno de AssetCache.
  *
- * Si un activo todavÌa no llegÛ desde Binance,
- * se agrega una estructura provisional con su sÌmbolo.
+ * Si un activo todav√≠a no lleg√≥ desde Binance,
+ * se agrega una estructura provisional con su s√≠mbolo.
  *
- * @param OutOrderedAssets Array que recibir· los activos ordenados.
+ * @param OutOrderedAssets Array que recibir√° los activos ordenados.
  */
 void UCryptoFinanceSubsystem::GetOrderedTargetAssets(
     TArray<FCryptoAssetData>& OutOrderedAssets
@@ -1061,27 +1144,27 @@ void UCryptoFinanceSubsystem::GetOrderedTargetAssets(
      * Reservamos capacidad para evitar reasignaciones innecesarias
      * mientras agregamos los activos.
      *
-     * TargetSymbols determina la cantidad m·xima esperada.
+     * TargetSymbols determina la cantidad m√°xima esperada.
      */
     OutOrderedAssets.Reserve(TargetSymbols.Num());
 
 
     /*
-     * Protegemos el acceso a AssetCache.
+     * Protegemos el acceso al cach√©.
      *
      * TargetSymbols y AllowedSymbols se consideran de solo lectura
-     * despuÈs de Initialize().
+     * despu√©s de Initialize().
      */
     FScopeLock Lock(&Mutex);
 
 
     // ------------------------------------------------------------
-    // RECORRER EL CAT¡LOGO EN SU ORDEN ORIGINAL
+    // RECORRER EL CAT√ÅLOGO EN SU ORDEN ORIGINAL
     // ------------------------------------------------------------
 
     for (const FString& Symbol : TargetSymbols)
     {
-        // Ignoramos identificadores vacÌos.
+        // Ignoramos identificadores vac√≠os.
         if (Symbol.IsEmpty())
         {
             continue;
@@ -1089,7 +1172,7 @@ void UCryptoFinanceSubsystem::GetOrderedTargetAssets(
 
 
         /*
-         * Buscamos el sÌmbolo dentro del cachÈ.
+         * Buscamos el s√≠mbolo dentro del cach√©.
          *
          * Si existe, agregamos una copia de los datos actuales.
          */
@@ -1100,12 +1183,12 @@ void UCryptoFinanceSubsystem::GetOrderedTargetAssets(
         else
         {
             /*
-             * Si todavÌa no recibimos informaciÛn de Binance,
+             * Si todav√≠a no recibimos informaci√≥n de Binance,
              * generamos una estructura provisional.
              *
-             * El sÌmbolo queda reservado en su posiciÛn correspondiente.
+             * El s√≠mbolo queda reservado en su posici√≥n correspondiente.
              *
-             * Esto permite mantener una distribuciÛn estable
+             * Esto permite mantener una distribuci√≥n estable
              * de los slots aunque algunos activos no tengan datos.
              */
             FCryptoAssetData Placeholder;

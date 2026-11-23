@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,16 +8,16 @@
 /**
  * FCryptoAssetData
  *
- * Estructura que representa la información de mercado de una criptomoneda.
+ * Estructura que representa la informaciÃ³n de mercado de una criptomoneda.
  *
- * Cada instancia almacena una fotografía de los últimos datos recibidos
- * desde Binance para un determinado par de negociación.
+ * Cada instancia almacena una fotografÃ­a de los Ãºltimos datos recibidos
+ * desde Binance para un determinado par de negociaciÃ³n.
  *
  * Ejemplo:
  * BTCUSDT representa el mercado de Bitcoin frente a Tether.
  *
- * Los valores numéricos se inicializan en 0.0 para evitar utilizar
- * valores sin inicializar antes de recibir información del servidor.
+ * Los valores numÃ©ricos se inicializan en 0.0 para evitar utilizar
+ * valores sin inicializar antes de recibir informaciÃ³n del servidor.
  *
  * Esta estructura se utiliza tanto en C++ como en Blueprints.
  */
@@ -28,18 +27,18 @@ struct FCryptoAssetData
     GENERATED_BODY()
 
     /**
-     * Símbolo identificador del par de mercado.
+     * SÃ­mbolo identificador del par de mercado.
      *
      * Ejemplo: BTCUSDT, ETHUSDT, SOLUSDT.
      *
-     * Se almacena en mayúsculas para mantener una identificación uniforme
-     * dentro del caché del subsistema.
+     * Se almacena en mayÃºsculas para mantener una identificaciÃ³n uniforme
+     * dentro del cachÃ© del subsistema.
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     FString Symbol;
 
     /**
-     * Último precio registrado para el activo.
+     * Ãšltimo precio registrado para el activo.
      *
      * Se obtiene del campo "c" del mensaje miniTicker de Binance.
      */
@@ -47,45 +46,45 @@ struct FCryptoAssetData
     double LastPrice = 0.0;
 
     /**
-     * Variación absoluta del precio durante el período informado.
+     * VariaciÃ³n absoluta del precio durante el perÃ­odo informado.
      *
-     * Fórmula:
+     * FÃ³rmula:
      * LastPrice - OpenPrice
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChange = 0.0;
 
     /**
-     * Variación porcentual del precio durante el período informado.
+     * VariaciÃ³n porcentual del precio durante el perÃ­odo informado.
      *
-     * Fórmula:
+     * FÃ³rmula:
      * ((LastPrice - OpenPrice) / OpenPrice) * 100
      *
-     * Se evita la división por cero cuando OpenPrice no es válido.
+     * Se evita la divisiÃ³n por cero cuando OpenPrice no es vÃ¡lido.
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChangePercent = 0.0;
 
     /**
-     * Precio máximo registrado durante el período informado.
+     * Precio mÃ¡ximo registrado durante el perÃ­odo informado.
      *
-     * Se obtiene del campo "h" del mensaje miniTicker.
+     * Se obtiene del campo "h" del mensaje miniTicker de Binance.
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double HighPrice = 0.0;
 
     /**
-     * Precio mínimo registrado durante el período informado.
+     * Precio mÃ­nimo registrado durante el perÃ­odo informado.
      *
-     * Se obtiene del campo "l" del mensaje miniTicker.
+     * Se obtiene del campo "l" del mensaje miniTicker de Binance.
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double LowPrice = 0.0;
 
     /**
-     * Volumen negociado durante el período informado.
+     * Volumen negociado durante el perÃ­odo informado.
      *
-     * Se obtiene del campo "v" del mensaje miniTicker.
+     * Se obtiene del campo "v" del mensaje miniTicker de Binance.
      */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double Volume = 0.0;
@@ -93,13 +92,13 @@ struct FCryptoAssetData
 
 
 /**
- * Delegado dinámico multicast.
+ * Delegado dinÃ¡mico multicast.
  *
  * Se ejecuta cuando el subsistema detecta nuevos datos de mercado
- * y llega el momento de distribuir una actualización.
+ * y llega el momento de distribuir una actualizaciÃ³n.
  *
- * El parámetro UpdatedAssets contiene una copia de los datos disponibles
- * en el caché en el momento de generar la actualización.
+ * El parÃ¡metro UpdatedAssets contiene una copia de los datos disponibles
+ * en el cachÃ© en el momento de generar la actualizaciÃ³n.
  *
  * Puede vincularse desde C++ y desde Blueprints.
  */
@@ -114,19 +113,19 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * UCryptoFinanceSubsystem
  *
  * Subsistema central encargado de recibir, procesar y distribuir
- * información financiera en tiempo real.
+ * informaciÃ³n financiera en tiempo real.
  *
  * Hereda de UGameInstanceSubsystem, por lo que su ciclo de vida
- * está asociado al GameInstance y no a un Actor individual del nivel.
+ * estÃ¡ asociado al GameInstance y no a un Actor individual del nivel.
  *
  * RESPONSABILIDADES PRINCIPALES:
  *
- * 1. Administrar la conexión WebSocket con Binance.
+ * 1. Administrar la conexiÃ³n WebSocket con Binance.
  * 2. Recibir y deserializar mensajes JSON.
- * 3. Filtrar los símbolos configurados en TargetSymbols.
- * 4. Mantener los últimos datos recibidos en AssetCache.
- * 5. Proteger el acceso concurrente al caché mediante FCriticalSection.
- * 6. Emitir actualizaciones mediante un ticker periódico.
+ * 3. Filtrar los sÃ­mbolos configurados en TargetSymbols.
+ * 4. Mantener los Ãºltimos datos recibidos en AssetCache.
+ * 5. Proteger el acceso concurrente al cachÃ© mediante FCriticalSection.
+ * 6. Emitir actualizaciones mediante un ticker periÃ³dico.
  * 7. Proporcionar funciones de consulta para los actores visuales.
  *
  * ARQUITECTURA:
@@ -134,10 +133,16 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * Binance WebSocket
  *        |
  *        v
+ * RecepciÃ³n del mensaje
+ *        |
+ *        v
+ * Transferencia al Game Thread
+ *        |
+ *        v
  * Procesamiento JSON
  *        |
  *        v
- * Filtro de símbolos
+ * Filtro de sÃ­mbolos
  *        |
  *        v
  * AssetCache
@@ -149,9 +154,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * Actores visuales de Vantage
  *
  * NOTA:
- * Esta versión mantiene la conexión inicial y el procesamiento de datos.
- * La reconexión automática y el endurecimiento completo del ciclo de vida
- * de los callbacks se incorporarán en una etapa posterior.
+ * La reconexiÃ³n automÃ¡tica se incorporarÃ¡ en una etapa posterior.
  */
 UCLASS()
 class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
@@ -160,6 +163,10 @@ class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
 
 public:
 
+    // ============================================================
+    // CICLO DE VIDA DEL SUBSISTEMA
+    // ============================================================
+
     /**
      * Inicializa el subsistema.
      *
@@ -167,14 +174,14 @@ public:
      * al GameInstance.
      *
      * Responsabilidades:
-     * - Inicializar la configuración de símbolos.
-     * - Normalizar los símbolos configurados.
-     * - Construir el conjunto de búsqueda AllowedSymbols.
-     * - Configurar el intervalo de actualización.
-     * - Establecer la conexión WebSocket.
-     * - Registrar el ticker periódico.
+     * - Inicializar la configuraciÃ³n de sÃ­mbolos.
+     * - Normalizar los sÃ­mbolos configurados.
+     * - Construir el conjunto de bÃºsqueda AllowedSymbols.
+     * - Configurar el intervalo de actualizaciÃ³n.
+     * - Establecer la conexiÃ³n WebSocket.
+     * - Registrar el ticker periÃ³dico.
      *
-     * @param Collection Colección de subsistemas utilizada por Unreal Engine.
+     * @param Collection ColecciÃ³n de subsistemas utilizada por Unreal Engine.
      */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
@@ -182,54 +189,63 @@ public:
     /**
      * Libera los recursos utilizados por el subsistema.
      *
-     * Se ejecuta cuando el GameInstance está finalizando
+     * Se ejecuta cuando el GameInstance estÃ¡ finalizando
      * o cuando Unreal Engine destruye el subsistema.
      *
      * Responsabilidades:
+     * - Marcar el inicio del cierre.
      * - Retirar el ticker registrado.
-     * - Cerrar la conexión WebSocket.
+     * - Cerrar la conexiÃ³n WebSocket.
      * - Liberar la referencia al WebSocket.
-     * - Ejecutar la implementación de la clase base.
+     * - Ejecutar la implementaciÃ³n de la clase base.
      */
     virtual void Deinitialize() override;
 
 
+    // ============================================================
+    // EVENTOS PÃšBLICOS
+    // ============================================================
+
     /**
-     * Evento público de actualización de datos financieros.
+     * Evento pÃºblico de actualizaciÃ³n de datos financieros.
      *
      * Los actores o Blueprints pueden suscribirse a este evento
-     * para recibir información actualizada sin consultar el caché
+     * para recibir informaciÃ³n actualizada sin consultar el cachÃ©
      * constantemente en cada frame.
      */
     UPROPERTY(BlueprintAssignable, Category = "Vantage|Events")
     FOnCryptoDataUpdated OnCryptoDataUpdated;
 
 
+    // ============================================================
+    // CONFIGURACIÃ“N PÃšBLICA
+    // ============================================================
+
     /**
-     * Catálogo ordenado de símbolos que Vantage debe visualizar.
+     * CatÃ¡logo ordenado de sÃ­mbolos que Vantage debe visualizar.
      *
      * Se puede configurar desde el editor o mediante Blueprint.
      *
-     * El orden de esta lista también determina el orden de salida
+     * El orden de esta lista tambiÃ©n determina el orden de salida
      * de GetOrderedTargetAssets().
      *
      * Ejemplo:
      * BTCUSDT, ETHUSDT, BNBUSDT, SOLUSDT...
      *
-     * Los símbolos se normalizan durante Initialize().
+     * Los sÃ­mbolos se normalizan durante Initialize().
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Catalog")
     TArray<FString> TargetSymbols;
 
 
     /**
-     * Intervalo de distribución de actualizaciones, expresado en segundos.
+     * Intervalo de distribuciÃ³n de actualizaciones, expresado en segundos.
      *
      * Ejemplo:
      * 0.25 segundos = 250 milisegundos.
      *
-     * Este intervalo regula la frecuencia de emisión del delegado.
-     * No modifica la frecuencia con la que Binance envía sus mensajes.
+     * Este intervalo regula la frecuencia de emisiÃ³n del delegado.
+     * No modifica la frecuencia con la que Binance envÃ­a sus mensajes.
      *
      * El valor se limita internamente al rango de 0.2 a 0.3 segundos.
      */
@@ -242,19 +258,23 @@ public:
     float UpdateInterval = 0.25f;
 
 
+    // ============================================================
+    // CONSULTAS PÃšBLICAS
+    // ============================================================
+
     /**
-     * Obtiene los datos almacenados para un símbolo específico.
+     * Obtiene los datos almacenados para un sÃ­mbolo especÃ­fico.
      *
-     * Realiza una búsqueda por clave dentro de AssetCache mediante TMap::Find().
+     * Realiza una bÃºsqueda por clave dentro de AssetCache mediante TMap::Find().
      *
-     * La consulta está protegida por Mutex para evitar leer el mapa
-     * mientras otra operación lo está modificando.
+     * La consulta estÃ¡ protegida por Mutex para evitar leer el mapa
+     * mientras otra operaciÃ³n lo estÃ¡ modificando.
      *
-     * @param Symbol Símbolo que se desea consultar.
-     * @param OutData Estructura donde se copiarán los datos encontrados.
+     * @param Symbol SÃ­mbolo que se desea consultar.
+     * @param OutData Estructura donde se copiarÃ¡n los datos encontrados.
      *
-     * @return true si el símbolo existe en el caché.
-     * @return false si el símbolo no existe o está vacío.
+     * @return true si el sÃ­mbolo existe en el cachÃ©.
+     * @return false si el sÃ­mbolo no existe o estÃ¡ vacÃ­o.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     bool GetAssetData(
@@ -269,11 +289,11 @@ public:
      * Los elementos se copian desde AssetCache hacia OutAssets.
      *
      * IMPORTANTE:
-     * TMap no garantiza un orden específico de iteración.
+     * TMap no garantiza un orden especÃ­fico de iteraciÃ³n.
      * Si se necesita respetar TargetSymbols, utilizar
      * GetOrderedTargetAssets().
      *
-     * @param OutAssets Array que recibirá los activos disponibles.
+     * @param OutAssets Array que recibirÃ¡ los activos disponibles.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetAllAssets(TArray<FCryptoAssetData>& OutAssets);
@@ -282,12 +302,12 @@ public:
     /**
      * Devuelve los activos respetando exactamente el orden de TargetSymbols.
      *
-     * Si un activo todavía no recibió datos desde Binance,
-     * se agrega una estructura provisional con su símbolo y valores numéricos
+     * Si un activo todavÃ­a no recibiÃ³ datos desde Binance,
+     * se agrega una estructura provisional con su sÃ­mbolo y valores numÃ©ricos
      * inicializados en cero.
      *
      * Esto permite mantener posiciones estables en la interfaz,
-     * incluso cuando algunos activos todavía no tienen cotización.
+     * incluso cuando algunos activos todavÃ­a no tienen cotizaciÃ³n.
      *
      * @param OutOrderedAssets Array de salida con los activos ordenados.
      */
@@ -299,20 +319,53 @@ public:
 
 private:
 
+    // ============================================================
+    // FUNCIONES INTERNAS: CONEXIÃ“N Y RECEPCIÃ“N
+    // ============================================================
+
     /**
-     * Crea e inicia la conexión WebSocket con Binance.
+     * Crea e inicia la conexiÃ³n WebSocket con Binance.
      *
-     * Registra los callbacks de conexión, error, cierre y recepción
+     * Registra los callbacks de conexiÃ³n, error, cierre y recepciÃ³n
      * de mensajes antes de iniciar Connect().
+     *
+     * El callback de recepciÃ³n Ãºnicamente transfiere el mensaje
+     * al Game Thread. No procesa directamente el JSON.
      */
     void ConnectWebSocket();
 
 
     /**
-     * Registra el ticker periódico encargado de distribuir actualizaciones.
+     * Procesa un mensaje JSON recibido desde Binance.
+     *
+     * Se ejecuta exclusivamente en el Game Thread.
+     *
+     * Responsabilidades:
+     * - Deserializar el mensaje.
+     * - Recorrer los activos recibidos.
+     * - Filtrar los sÃ­mbolos permitidos.
+     * - Extraer y convertir los valores numÃ©ricos.
+     * - Construir FCryptoAssetData.
+     * - Actualizar AssetCache.
+     * - Marcar que existen datos nuevos.
+     *
+     * Esta funciÃ³n es privada porque el procesamiento de mensajes
+     * es una responsabilidad interna del subsistema.
+     *
+     * @param MessageString Mensaje JSON completo recibido desde Binance.
+     */
+    void ProcessWebSocketMessage(const FString& MessageString);
+
+
+    // ============================================================
+    // FUNCIONES INTERNAS: DISTRIBUCIÃ“N DE DATOS
+    // ============================================================
+
+    /**
+     * Registra el ticker periÃ³dico encargado de distribuir actualizaciones.
      *
      * Si ya existe un ticker registrado, primero lo elimina
-     * para evitar registrar múltiples instancias.
+     * para evitar registrar mÃºltiples instancias.
      */
     void SetupTicker();
 
@@ -320,11 +373,11 @@ private:
     /**
      * Callback ejecutado por FTSTicker.
      *
-     * Comprueba si llegaron datos nuevos desde la última emisión.
-     * Si corresponde, genera una copia del caché y distribuye
+     * Comprueba si llegaron datos nuevos desde la Ãºltima emisiÃ³n.
+     * Si corresponde, genera una copia del cachÃ© y distribuye
      * el evento OnCryptoDataUpdated.
      *
-     * @param DeltaTime Tiempo transcurrido desde la última actualización.
+     * @param DeltaTime Tiempo transcurrido desde la Ãºltima actualizaciÃ³n.
      *
      * @return true para mantener el ticker activo.
      */
@@ -332,6 +385,10 @@ private:
 
 
 private:
+
+    // ============================================================
+    // RECURSOS DE CONEXIÃ“N
+    // ============================================================
 
     /**
      * Referencia al cliente WebSocket utilizado para comunicarse con Binance.
@@ -342,38 +399,46 @@ private:
     TSharedPtr<IWebSocket> WebSocket;
 
 
+    // ============================================================
+    // ALMACENAMIENTO Y FILTRADO DE DATOS
+    // ============================================================
+
     /**
-     * Caché central de activos financieros.
+     * CachÃ© central de activos financieros.
      *
      * Clave:
-     * Símbolo del activo, por ejemplo BTCUSDT.
+     * SÃ­mbolo del activo, por ejemplo BTCUSDT.
      *
      * Valor:
-     * Estructura FCryptoAssetData con los últimos datos recibidos.
+     * Estructura FCryptoAssetData con los Ãºltimos datos recibidos.
      *
      * Se utiliza TMap porque permite localizar un activo mediante
-     * su símbolo sin recorrer secuencialmente todos los elementos.
+     * su sÃ­mbolo sin recorrer secuencialmente todos los elementos.
      *
-     * El acceso está protegido por Mutex.
+     * El acceso estÃ¡ protegido por Mutex.
      */
     TMap<FString, FCryptoAssetData> AssetCache;
 
 
     /**
-     * Conjunto de símbolos permitidos para el procesamiento de mensajes.
+     * Conjunto de sÃ­mbolos permitidos para el procesamiento de mensajes.
      *
      * Se construye una sola vez durante Initialize(), a partir
      * de TargetSymbols ya normalizado.
      *
-     * TSet permite comprobar rápidamente si un símbolo pertenece
-     * al catálogo configurado.
+     * TSet permite comprobar rÃ¡pidamente si un sÃ­mbolo pertenece
+     * al catÃ¡logo configurado.
      *
-     * Después de Initialize() se considera de solo lectura.
+     * DespuÃ©s de Initialize() se considera de solo lectura.
      * Si en el futuro permitimos modificar TargetSymbols durante
-     * la ejecución, habrá que reconstruir este conjunto de forma segura.
+     * la ejecuciÃ³n, habrÃ¡ que reconstruir este conjunto de forma segura.
      */
     TSet<FString> AllowedSymbols;
 
+
+    // ============================================================
+    // SINCRONIZACIÃ“N
+    // ============================================================
 
     /**
      * Mutex utilizado para proteger los datos compartidos.
@@ -382,14 +447,15 @@ private:
      * - AssetCache.
      * - bNewDataReceived.
      *
-     * Permite que las operaciones de lectura y escritura no accedan
-     * simultáneamente a esas estructuras desde distintos hilos.
-     *
-     * FScopeLock adquiere el bloqueo al entrar en el ámbito
-     * y lo libera automáticamente al salir.
+     * FScopeLock adquiere el bloqueo al entrar en el Ã¡mbito
+     * y lo libera automÃ¡ticamente al salir.
      */
     FCriticalSection Mutex;
 
+
+    // ============================================================
+    // CONTROL DEL TICKER
+    // ============================================================
 
     /**
      * Identificador del ticker registrado en FTSTicker.
@@ -400,9 +466,13 @@ private:
     FTSTicker::FDelegateHandle TickerHandle;
 
 
+    // ============================================================
+    // ESTADO INTERNO
+    // ============================================================
+
     /**
-     * Indica si se recibió al menos una actualización de mercado
-     * desde la última distribución del evento.
+     * Indica si se recibiÃ³ al menos una actualizaciÃ³n de mercado
+     * desde la Ãºltima distribuciÃ³n del evento.
      *
      * Se modifica y consulta dentro de secciones protegidas por Mutex.
      *
@@ -410,4 +480,15 @@ private:
      * datos nuevos desde Binance.
      */
     bool bNewDataReceived = false;
+
+
+    /**
+     * Indica que el subsistema comenzÃ³ su proceso de destrucciÃ³n.
+     *
+     * Se utiliza para descartar tareas de procesamiento que hayan
+     * quedado pendientes en la cola del Game Thread.
+     *
+     * Se modifica y consulta desde el Game Thread.
+     */
+    bool bIsShuttingDown = false;
 };
