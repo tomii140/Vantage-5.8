@@ -1,130 +1,156 @@
 # Vantage
 
-1. Estructura de Archivos y Carpetas Creadas
-Source/Vantage/Public/ y Private/: Separación estándar de Unreal Engine entre archivos de cabecera (.h) y de implementación (.cpp).
+**Vantage** is a real-time cryptocurrency market visualizer built with **Unreal Engine 5 and C++**.
 
-CryptoWorker.h / .cpp: Define el hilo secundario asíncrono (FRunnable) encargado de manejar la conexión de red por WebSocket con Binance sin bloquear el motor de juego.
+The project connects to Binance through a WebSocket stream, filters a configurable set of USDT trading pairs, stores the latest market data in a centralized subsystem, and exposes that data to in-world terminal and slot actors.
 
-CryptoFinanceSubsystem.h / .cpp: Un subsistema de tipo GameInstanceSubsystem que persiste durante la ejecución global, administra el caché de activos financieros con seguridad de hilos (FCriticalSection) y se comunica mediante delegados.
+> Vantage is a learning and portfolio project focused on Unreal Engine C++, real-time data integration, and modular visualization. It is not a trading platform or an exchange.
 
-CryptoInteractableInterface.h / .cpp: Interfaz universal expuesta a C++ y Blueprints para elementos interactivos en el entorno (paneles, carruseles 3D).
+## Overview
 
-2. Qué hace cada componente (Implementación técnica realizada)
-Concurrencia Segura (FCryptoWorker):
+- **Engine:** Unreal Engine 5
+- **Language:** C++
+- **Market data source:** Binance WebSocket
+- **Connection type:** All-market mini-ticker stream
+- **Core architecture:** UGameInstanceSubsystem
+- **Visualization:** Unreal actors, dynamic materials, and widget components
 
-Establece la conexión WebSocket a la API de Binance (wss://[stream.binance.com:9443/ws/btcusdt@ticker](https://stream.binance.com:9443/ws/btcusdt@ticker)).
+## Current Features
 
-Utiliza una cola segura para hilos (TQueue) para evitar que el hilo de red escriba directamente en la memoria del motor (lo que causaría un cierre forzoso/crash).
+- Receives Binance mini-ticker updates through a WebSocket connection.
+- Filters incoming market data using a configurable list of target symbols.
+- Maintains a centralized cache of the latest data for each asset.
+- Uses a thread-safe critical section when accessing shared market data.
+- Broadcasts data updates at a controlled interval using FTSTicker.
+- Provides asset lookup by symbol through the subsystem.
+- Supports ordered retrieval of configured assets.
+- Displays assets through a terminal actor with pagination.
+- Uses slot actors, dynamic material instances, and widget components for the visual layer.
 
-Sincronización con el Hilo Principal (UCryptoFinanceSubsystem):
+## Architecture
 
-Registra un FTSTicker que revisa periódicamente la cola de mensajes en cada ciclo de actualización del juego de manera limpia.
+The system is divided into three main areas.
 
-Define la estructura de datos FCryptoAssetData lista para almacenar precios, cambios porcentuales y volúmenes.
+### 1. Market Data Layer
 
-Compatibilidad de Tipos corregida:
+**UCryptoFinanceSubsystem**
 
-Se ajustó el manejo del identificador del ticker a FTSTicker::FDelegateHandle acorde a los requerimientos de la versión actual del motor.
+A UGameInstanceSubsystem responsible for the market-data lifecycle.
 
-3. Estado Actual
-El proyecto compila exitosamente (DebugGame_Editor x64), con el enlace de WebSockets operativo y el puente seguro entre el hilo de red y el subsistema de finanzas listo. Mañana continuaremos con la deserialización del JSON para poblar el caché de datos en tiempo real.
+Its responsibilities include:
 
-Aquí tienes la actualización completa del registro técnico basada en lo que realmente implementamos y corregimos hasta este momento, lista para tu commit:
+- Opening and managing the Binance WebSocket connection.
+- Parsing incoming JSON messages.
+- Filtering symbols against the configured target list.
+- Updating the in-memory asset cache.
+- Providing access to cached asset data.
+- Broadcasting updates at a controlled interval.
 
-# Vantage - Actualización del Estado del Proyecto 15/10/2026
+Current stream endpoint:
 
-1. Modificaciones y Evolución de la Arquitectura
-Limpieza de Hilos Secundarios (FCryptoWorker / FRunnable): Se eliminaron por completo los archivos físicos y lógicos de CryptoWorker.h y CryptoWorker.cpp, trasladando la conexión de red WebSocket de forma directa y nativa al hilo principal dentro del subsistema para mayor estabilidad.
+```text
+wss://stream.binance.com:9443/ws/!miniTicker@arr
+```
 
-Subsistema Global (UCryptoFinanceSubsystem): Mantiene la persistencia a nivel de GameInstance, gestionando el caché de activos con seguridad de hilos mediante FCriticalSection y emitiendo actualizaciones fluidas hacia los actores visuales.
+### 2. Interaction Layer
 
-Stream de Binance Optimizado: Se migró con éxito la URL del WebSocket del endpoint completo (@ticker) al endpoint @miniTicker (wss://[stream.binance.com:9443/ws/btcusdt@miniTicker](https://stream.binance.com:9443/ws/btcusdt@miniTicker)), eliminando campos ambiguos y marcas de tiempo que desbordaban los valores numéricos.
+**CryptoInteractableInterface**
 
-Tipos de Datos de Alta Precisión: Se actualizaron todas las variables de la estructura FCryptoAssetData a tipo double y se implementó la función FCString::Atod para garantizar una conversión numérica exacta y sin distorsiones de los precios en tiempo real.
+Defines a common interaction contract for objects that can respond to user interaction in the environment.
 
-Throttling y Sincronización: Se configuró un FTSTicker con un intervalo de control de 300 ms (0.3s) para regular el broadcast visual hacia el ACryptoTerminalActor y evitar saturación en pantalla.
+### 3. Visualization Layer
 
-2. Archivos Afectados
-Eliminados: CryptoWorker.h, CryptoWorker.cpp.
+**ACryptoTerminalActor**
 
-Actualizados:
+Acts as the central terminal for displaying market assets. It retrieves data from the finance subsystem and handles the current paginated asset view.
 
-CryptoFinanceSubsystem.h y .cpp (Lógica de red nativa, stream miniTicker y precisión double/Atod).
+**ACryptoSlotActor**
 
-ACryptoTerminalActor.cpp (Lectura robusta desde el caché del subsistema y formato de impresión en consola/pantalla).
+Represents an individual visual slot. It uses a dynamic material instance and a widget component to display asset-related visual information.
 
-3. Estado Actual
-El proyecto compila exitosamente (Succeeded en Development_Editor x64), la conexión WebSocket con Binance se establece de forma limpia y la terminal del motor (ACryptoTerminalActor) ya imprime en tiempo real y con total precisión las cotizaciones reales de Bitcoin (BTCUSDT).
---------------------------------------------------------------------------------------------------------
+## Data Flow
 
-# Vantage — Documentación del Estado del Proyecto y Registro de Cambios
-Fecha: 15/10/2026
+```text
+Binance WebSocket
+       |
+       v
+JSON message parsing
+       |
+       v
+Target-symbol filtering
+       |
+       v
+UCryptoFinanceSubsystem
+       |
+       v
+Thread-safe asset cache
+       |
+       v
+Controlled update broadcast
+       |
+       +--------------------+
+       |                    |
+       v                    v
+ACryptoTerminalActor   ACryptoSlotActor
+       |                    |
+       v                    v
+Asset pagination      3D slot visualization
+```
 
-1. Evolución de la Arquitectura y Modificaciones de Código
-Optimización de Concurrencia (Eliminación de hilos secundarios): Se removieron por completo los archivos CryptoWorker.h y CryptoWorker.cpp. La gestión de la conexión WebSocket se trasladó de forma directa y nativa al hilo principal dentro del subsistema para maximizar la estabilidad.
+## Source Structure
 
-Subsistema Global (UCryptoFinanceSubsystem): Mantiene la persistencia a nivel de GameInstance, asegurando el caché de activos mediante exclusión mutua (FCriticalSection) y sincronizando las actualizaciones hacia los actores visuales.
+```text
+Source/
+└── Vantage/
+    ├── Public/
+    │   ├── ACryptoSlotActor.h
+    │   ├── ACryptoTerminalActor.h
+    │   ├── CryptoFinanceSubsystem.h
+    │   └── CryptoInteractableInterface.h
+    │
+    ├── Private/
+    │   ├── ACryptoSlotActor.cpp
+    │   ├── ACryptoTerminalActor.cpp
+    │   ├── CryptoFinanceSubsystem.cpp
+    │   └── CryptoInteractableInterface.cpp
+    │
+    └── Vantage.Build.cs
+```
 
-Stream de Binance Optimizado: Migración del endpoint completo (@ticker) al endpoint ligero @miniTicker (wss://[stream.binance.com:9443/ws/btcusdt@miniTicker](https://stream.binance.com:9443/ws/btcusdt@miniTicker)), eliminando campos redundantes que saturaban el procesamiento numérico.
+## Technical Concepts
 
-Tipos de Datos de Alta Precisión: Actualización de todas las variables en la estructura FCryptoAssetData a tipo double, implementando FCString::Atod para conversiones numéricas exactas sin pérdida de decimales.
+This project is being developed to practice and demonstrate:
 
-Control de Frecuencia (Throttling): Configuración de un FTSTicker con un intervalo fijo de 300 ms (0.3 s) para regular el flujo de emisiones visuales hacia el terminal y evitar sobrecarga en pantalla.
+- Unreal Engine C++ development.
+- Game Instance Subsystems and lifecycle management.
+- WebSocket communication with an external data provider.
+- JSON parsing and data conversion.
+- Data caching with TMap and symbol filtering with TSet.
+- Thread-safe access to shared data using FCriticalSection.
+- Periodic update scheduling with FTSTicker.
+- Delegates and communication between gameplay systems.
+- Dynamic Material Instances and actor-based visualization.
+- Separation between data acquisition, interaction, and presentation.
 
-2. Inventario de Archivos Afectados
-Eliminados:
+## Current Development Status
 
-CryptoWorker.h
+The core data pipeline is implemented: the project connects to Binance, parses mini-ticker messages, filters configured assets, updates the cache, and exposes the data to the terminal system.
 
-CryptoWorker.cpp
+The visualization and interaction layer is still being developed. Some presentation details, including the complete asset information displayed by each slot, remain to be implemented.
 
-Actualizados:
+### Planned Improvements
 
-CryptoFinanceSubsystem.h y .cpp (Lógica de red nativa y stream miniTicker).
+- Replace the all-market mini-ticker stream with individual streams for the configured symbols, reducing unnecessary incoming data.
+- Add robust WebSocket reconnection and connection-state handling.
+- Review callback and subsystem shutdown lifetimes.
+- Complete the slot's asset-information presentation.
+- Make terminal pagination use a deterministic asset order.
+- Improve the visual layouts for different asset arrangements.
+- Add clearer loading, disconnected, and data-unavailable states.
+- Expand documentation as the architecture evolves.
 
-ACryptoTerminalActor.cpp (Lectura robusta desde el subsistema).
+## Project Goal
 
-No Actualizados / Descartados:
+The goal of Vantage is to build a polished real-time market visualization experience while developing practical skills in Unreal Engine C++, networking, data structures, and modular software architecture.
 
-Módulos y plugins de OpenXR (descartados al no requerir cascos físicos de RV/RA; el desarrollo se enfoca en despliegue móvil táctil con simulación espacial nativa).
-
-3. Estado Actual del Proyecto
-Compilación: Exitosa (Succeeded en configuración Development_Editor x64).
-
-Conectividad: Enlace WebSocket con Binance operativo y estable, procesando cotizaciones en tiempo real (ej. BTCUSDT).
-
-Arquitectura de Interfaz Definida:
-
-Estructura híbrida 2D/3D para smartphones.
-
-Visualización minimalista por defecto (solo nombres/símbolos de criptomonedas).
-
-Sistema de layouts modulares (moldes geométricos 3D: diagonal, horizontal, vertical, circular; vistas 2D: fila de 5 y matriz extendida de 15 elementos).
-
-Interfaz de detalle bajo demanda mediante toque (tap) para desplegar la información completa del subsistema.
-
-# 
-----------------------------------------------------------------------------------------------------
-Resumen: Refactorización arquitectónica del sistema de visualización de criptomonedas, eliminando los actores individuales 3D en favor de un sistema centralizado de texturas dinámicas sobre un plano estandarizado.
-
-Problemas y Soluciones
-Problema: Discrepancias de escala, rotación y pivotes entre los distintos modelos FBX de las criptomonedas, haciendo inviable el mantenimiento de múltiples Blueprints individuales.
-
-Solución: Eliminación completa de la clase base ACryptoCoinBase y sus derivados. Se centralizó la representación visual en ACryptoSlotActor utilizando un plano genérico con materiales dinámicos (UMaterialInstanceDynamic) para proyectar texturas estandarizadas.
-
-Problema: Errores de compilación por referencias huérfanas en ACryptoTerminalActor hacia la clase eliminada.
-
-Solución: Refactorización del terminal para reemplazar CoinClassMap por CoinTextureMap (TMap<FString, UTexture2D*>).
-
-Problema: Restricciones de transformación y rotación en el visor de Blueprints debido a que la malla estática actuaba como componente raíz (RootComponent).
-
-Solución: Establecimiento de un USceneComponent genérico como raíz (SceneRoot) y reestructuración de la jerarquía de componentes hijos.
-
-Problema: Errores de sintaxis del Unreal Header Tool (UHT) por orden incorrecto de includes y nombres de archivo desalineados.
-
-Solución: Reordenamiento de las macros de generación (.generated.h al final) y unificación de nomenclaturas en los archivos fuente.
-
-Pendientes
-Asignar las texturas de las criptomonedas en el CoinTextureMap desde el editor en el Blueprint del terminal.
-
-Completar la lógica de asignación de textura en el método InitSlot de ACryptoSlotActor.
+The project is actively evolving. Features listed under **Current Features** reflect the implemented code; items under **Planned Improvements** are not yet complete.
