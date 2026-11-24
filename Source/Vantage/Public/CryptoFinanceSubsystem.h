@@ -1,8 +1,10 @@
+
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "IWebSocket.h"
+#include "Containers/Ticker.h"
 #include "CryptoFinanceSubsystem.generated.h"
 
 /**
@@ -73,13 +75,19 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * - AllowedSymbols (TSet): filtro de pertenencia rápida, construido una vez.
  * - AssetCache (TMap): almacenamiento principal y búsqueda por símbolo.
  *
- * No se mantiene una segunda colección de FCryptoAssetData ordenada: duplicar
- * los registros exigiría sincronizar dos fuentes de datos. El orden se obtiene
+ * No se mantiene una segunda colección ordenada: el orden se obtiene
  * recorriendo TargetSymbols y consultando AssetCache.
  *
- * Los mensajes de red se transfieren al Game Thread antes de tocar el estado
- * del subsistema. Mutex se conserva como protección del caché y de la bandera
- * de actualización frente a futuras rutas de acceso desde otros hilos.
+ * ARQUITECTURA DE CONEXIÓN:
+ *
+ * - Mantiene una sola conexión activa o en proceso de conexión.
+ * - Reintenta automáticamente ante errores y cierres inesperados.
+ * - Utiliza backoff exponencial con un máximo de 30 segundos.
+ * - Asigna una generación a cada conexión para descartar callbacks antiguos.
+ * - Cancela los reintentos durante Deinitialize().
+ *
+ * Los callbacks de red transfieren su procesamiento al Game Thread antes de
+ * modificar el estado del UObject o del caché.
  */
 UCLASS()
 class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
@@ -95,7 +103,7 @@ public:
     /** Inicializa el catálogo, el filtro, la conexión y el ticker. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-    /** Detiene el ticker y cierra/libera la conexión antes de destruirse. */
+    /** Detiene los tickers y cierra/libera la conexión antes de destruirse. */
     virtual void Deinitialize() override;
 
 
@@ -150,18 +158,14 @@ public:
 
     /**
      * Devuelve los activos recibidos actualmente.
-     *
-     * La salida respeta el orden de TargetSymbols. No incluye placeholders
-     * para símbolos que todavía no recibieron datos.
+     * La salida respeta el orden de TargetSymbols y no incluye placeholders.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetAllAssets(TArray<FCryptoAssetData>& OutAssets);
 
     /**
      * Devuelve todos los símbolos configurados en el orden de TargetSymbols.
-     *
-     * Si un activo todavía no llegó desde Binance, devuelve una estructura
-     * provisional con el símbolo y sus valores numéricos en cero.
+     * Los activos todavía no recibidos se representan mediante placeholders.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetOrderedTargetAssets(TArray<FCryptoAssetData>& OutOrderedAssets);
@@ -170,11 +174,59 @@ public:
 private:
 
     // ------------------------------------------------------------
+    // ESTADO DE CONEXIÓN
+    // ------------------------------------------------------------
+
+    /**
+     * Estados internos del ciclo de vida del WebSocket.
+     * El estado se modifica exclusivamente desde el Game Thread.
+     */
+    enum class EConnectionState : uint8
+    {
+        Disconnected,
+        Connecting,
+        Connected,
+        Reconnecting,
+        ShuttingDown
+    };
+
+    /** Estado actual de la conexión. */
+    EConnectionState ConnectionState = EConnectionState::Disconnected;
+
+    /** Identificador incremental para invalidar callbacks de sockets anteriores. */
+    uint64 ConnectionGeneration = 0;
+
+    /** Cantidad de reintentos consecutivos desde la última conexión exitosa. */
+    int32 ReconnectAttempt = 0;
+
+    /** Espera inicial antes del primer reintento, expresada en segundos. */
+    static constexpr float ReconnectBaseDelay = 1.0f;
+
+    /** Espera máxima entre intentos consecutivos, expresada en segundos. */
+    static constexpr float ReconnectMaxDelay = 30.0f;
+
+
+    // ------------------------------------------------------------
     // CONEXIÓN Y PROCESAMIENTO DE RED
     // ------------------------------------------------------------
 
     /** Crea el cliente WebSocket y registra sus callbacks. */
     void ConnectWebSocket();
+
+    /** Programa un único intento de reconexión con espera progresiva. */
+    void ScheduleReconnect();
+
+    /** Callback de una sola ejecución que inicia el siguiente intento. */
+    bool HandleReconnectTimer(float DeltaTime);
+
+    /** Invalida la conexión fallida y programa su reemplazo. */
+    void HandleConnectionFailure(uint64 FailedGeneration, const FString& Reason);
+
+    /** Confirma una conexión exitosa si pertenece a la generación actual. */
+    void HandleSocketConnected(uint64 ConnectedGeneration);
+
+    /** Comprueba si un callback todavía pertenece al socket vigente. */
+    bool IsCurrentConnection(uint64 CandidateGeneration) const;
 
     /**
      * Procesa un mensaje JSON de Binance.
@@ -203,13 +255,7 @@ private:
 
     /**
      * Construye una instantánea siguiendo el orden de TargetSymbols.
-     *
-     * IMPORTANTE: el llamador debe mantener Mutex adquirido durante la llamada.
-     * Si bIncludePlaceholders es false, se omiten símbolos sin datos recibidos.
-     * Si es true, se agrega una estructura provisional para cada símbolo faltante.
-     *
-     * Esta función es privada para centralizar la política de orden y evitar
-     * implementar recorridos diferentes en el ticker y en las consultas.
+     * El llamador debe mantener Mutex adquirido durante la llamada.
      */
     void BuildOrderedSnapshot(
         TArray<FCryptoAssetData>& OutAssets,
@@ -231,22 +277,12 @@ private:
     // ALMACENAMIENTO Y CATÁLOGO
     // ------------------------------------------------------------
 
-    /**
-     * Caché principal: símbolo -> datos actuales.
-     *
-     * TMap se conserva porque permite búsquedas rápidas por símbolo. No se usa
-     * su orden interno para la presentación; el orden visible proviene de
-     * TargetSymbols.
-     */
+    /** Caché principal: símbolo -> datos actuales. */
     TMap<FString, FCryptoAssetData> AssetCache;
 
     /**
      * Conjunto de símbolos aceptados por el filtro de entrada.
-     *
-     * Se construye una sola vez a partir del catálogo normalizado. No se
-     * reconstruye por mensaje. Se considera de solo lectura después de
-     * Initialize(); los cambios dinámicos del catálogo requerirían una API
-     * específica que actualice ambos contenedores de forma controlada.
+     * Se construye una sola vez durante Initialize().
      */
     TSet<FString> AllowedSymbols;
 
@@ -255,27 +291,23 @@ private:
     // SINCRONIZACIÓN
     // ------------------------------------------------------------
 
-    /**
-     * Protege AssetCache y bNewDataReceived.
-     * FScopeLock garantiza que el bloqueo se libere al salir del ámbito.
-     */
+    /** Protege AssetCache y bNewDataReceived. */
     FCriticalSection Mutex;
 
 
     // ------------------------------------------------------------
-    // TICKER Y ESTADO DEL SUBSISTEMA
+    // TICKERS Y ESTADO DEL SUBSISTEMA
     // ------------------------------------------------------------
 
-    /** Handle necesario para retirar el callback registrado en FTSTicker. */
+    /** Handle del callback periódico que distribuye datos a los consumidores. */
     FTSTicker::FDelegateHandle TickerHandle;
+
+    /** Handle del callback de una sola ejecución para reintentar la conexión. */
+    FTSTicker::FDelegateHandle ReconnectTickerHandle;
 
     /** Indica que hay datos nuevos pendientes de distribuir. */
     bool bNewDataReceived = false;
 
-    /**
-     * Se activa al comenzar Deinitialize().
-     * Las tareas que todavía estén encoladas en el Game Thread descartan
-     * el mensaje cuando detectan esta bandera.
-     */
+    /** Impide iniciar conexiones o procesar tareas después del cierre. */
     bool bIsShuttingDown = false;
 };

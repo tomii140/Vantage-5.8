@@ -1,16 +1,17 @@
+
 #include "CryptoFinanceSubsystem.h"
 
 // Módulo que proporciona la implementación WebSocket de Unreal Engine.
 #include "WebSocketsModule.h"
 
-// FTSTicker: mecanismo de callbacks periódicos independiente del Tick de un Actor.
+// FTSTicker: mecanismo de callbacks temporizados independiente del Tick de un Actor.
 #include "Containers/Ticker.h"
 
 // Deserialización de los mensajes JSON enviados por Binance.
 #include "Serialization/JsonSerializer.h"
 #include "Dom/JsonObject.h"
 
-// Permite transferir el procesamiento recibido por red al Game Thread.
+// Permite transferir los callbacks recibidos por red al Game Thread.
 #include "Async/Async.h"
 
 
@@ -30,6 +31,9 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 
     bIsShuttingDown = false;
     bNewDataReceived = false;
+    ConnectionState = EConnectionState::Disconnected;
+    ReconnectAttempt = 0;
+    ConnectionGeneration = 0;
 
     // --------------------------------------------------------
     // 1. ASEGURAR QUE EL MÓDULO WEBSOCKETS ESTÉ DISPONIBLE
@@ -75,6 +79,7 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
      */
     TSet<FString> UniqueSymbols;
     TArray<FString> NormalizedSymbols;
+
     NormalizedSymbols.Reserve(TargetSymbols.Num());
     UniqueSymbols.Reserve(TargetSymbols.Num());
 
@@ -82,13 +87,11 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     {
         Symbol = Symbol.ToUpper().TrimStartAndEnd();
 
-        // Los identificadores vacíos no representan mercados válidos.
         if (Symbol.IsEmpty())
         {
             continue;
         }
 
-        // Contains permite conservar la primera aparición sin alterar el orden.
         if (!UniqueSymbols.Contains(Symbol))
         {
             UniqueSymbols.Add(Symbol);
@@ -96,7 +99,6 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
         }
     }
 
-    // Reemplazamos el catálogo por su versión normalizada y sin duplicados.
     TargetSymbols = MoveTemp(NormalizedSymbols);
 
     // --------------------------------------------------------
@@ -106,9 +108,6 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     /*
      * AllowedSymbols se consulta para cada activo recibido, pero solo se
      * construye aquí. Evitamos crear o reconstruir un TSet en cada mensaje.
-     *
-     * Si el catálogo queda vacío, el filtro no aceptará ningún símbolo:
-     * esto evita interpretar accidentalmente una lista vacía como "todos".
      */
     AllowedSymbols.Reset();
     AllowedSymbols.Reserve(TargetSymbols.Num());
@@ -128,25 +127,30 @@ void UCryptoFinanceSubsystem::Initialize(FSubsystemCollectionBase& Collection)
     // 6. ACTIVAR CONEXIÓN Y TICKER
     // --------------------------------------------------------
 
-    ConnectWebSocket();
     SetupTicker();
+    ConnectWebSocket();
 }
 
 
 /**
  * Deinitialize
  *
- * Detiene los callbacks periódicos y solicita el cierre del WebSocket.
- * La bandera de cierre se activa antes de liberar recursos para que cualquier
- * tarea pendiente en el Game Thread descarte el mensaje recibido.
+ * Invalida primero todas las operaciones pendientes. Después retira los
+ * tickers y cierra el WebSocket.
+ *
+ * Los callbacks que lleguen durante el cierre serán descartados mediante
+ * bIsShuttingDown y ConnectionGeneration.
  */
 void UCryptoFinanceSubsystem::Deinitialize()
 {
-    // Desde este punto no aceptamos más procesamiento de mensajes.
     bIsShuttingDown = true;
+    ConnectionState = EConnectionState::ShuttingDown;
+
+    // Incrementar la generación invalida todas las tareas ya encoladas.
+    ++ConnectionGeneration;
 
     // --------------------------------------------------------
-    // 1. RETIRAR EL TICKER
+    // 1. RETIRAR EL TICKER DE DISTRIBUCIÓN
     // --------------------------------------------------------
 
     if (TickerHandle.IsValid())
@@ -156,17 +160,33 @@ void UCryptoFinanceSubsystem::Deinitialize()
     }
 
     // --------------------------------------------------------
-    // 2. CERRAR Y LIBERAR EL WEBSOCKET
+    // 2. CANCELAR CUALQUIER REINTENTO PROGRAMADO
+    // --------------------------------------------------------
+
+    if (ReconnectTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(ReconnectTickerHandle);
+        ReconnectTickerHandle.Reset();
+    }
+
+    // --------------------------------------------------------
+    // 3. CERRAR Y LIBERAR EL WEBSOCKET
     // --------------------------------------------------------
 
     if (WebSocket.IsValid())
     {
-        if (WebSocket->IsConnected())
-        {
-            WebSocket->Close();
-        }
-
+        /*
+         * Se conserva una referencia local durante Close().
+         * Los callbacks provocados por este cierre serán descartados porque
+         * la generación ya fue incrementada y el subsistema está cerrándose.
+         */
+        TSharedPtr<IWebSocket> SocketToClose = WebSocket;
         WebSocket.Reset();
+
+        if (SocketToClose->IsConnected())
+        {
+            SocketToClose->Close();
+        }
     }
 
     Super::Deinitialize();
@@ -174,20 +194,48 @@ void UCryptoFinanceSubsystem::Deinitialize()
 
 
 // ============================================================
-// CONEXIÓN WEBSOCKET
+// CONEXIÓN WEBSOCKET Y RECONEXIÓN AUTOMÁTICA
 // ============================================================
 
 /**
  * ConnectWebSocket
  *
- * Crea el cliente y registra los callbacks de conexión.
- * El callback OnMessage no consulta miembros ni procesa JSON desde el hilo
- * de red: solamente copia el mensaje y agenda el trabajo en Game Thread.
+ * Crea una nueva instancia del cliente y registra sus callbacks.
+ *
+ * Cada conexión recibe un identificador incremental. Los callbacks capturan
+ * ese identificador y solo pueden modificar el subsistema si todavía coincide
+ * con ConnectionGeneration.
+ *
+ * Esta función debe ejecutarse en Game Thread.
  */
 void UCryptoFinanceSubsystem::ConnectWebSocket()
 {
+    if (bIsShuttingDown)
+    {
+        return;
+    }
+
+    // Evita crear otra conexión si ya hay una conexión en curso o activa.
+    if (ConnectionState == EConnectionState::Connecting ||
+        ConnectionState == EConnectionState::Connected)
+    {
+        return;
+    }
+
+    // Si quedara un reintento pendiente, lo cancelamos antes de conectar.
+    if (ReconnectTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(ReconnectTickerHandle);
+        ReconnectTickerHandle.Reset();
+    }
+
     const FString ServerUrl =
         TEXT("wss://stream.binance.com:9443/ws/!miniTicker@arr");
+
+    // Cada intento crea una nueva generación de conexión.
+    const uint64 ThisGeneration = ++ConnectionGeneration;
+
+    ConnectionState = EConnectionState::Connecting;
 
     WebSocket = FWebSocketsModule::Get().CreateWebSocket(ServerUrl);
 
@@ -198,50 +246,123 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
             Error,
             TEXT("[Vantage] No se pudo crear el cliente WebSocket.")
         );
+
+        HandleConnectionFailure(
+            ThisGeneration,
+            TEXT("No se pudo crear el cliente WebSocket.")
+        );
+
         return;
     }
+
+    const TWeakObjectPtr<UCryptoFinanceSubsystem> WeakThis(this);
 
     // --------------------------------------------------------
     // CALLBACK: CONEXIÓN EXITOSA
     // --------------------------------------------------------
 
-    WebSocket->OnConnected().AddLambda([]()
-    {
-        UE_LOG(
-            LogTemp,
-            Log,
-            TEXT("[Vantage] Conectado al WebSocket de Binance (!miniTicker@arr).")
-        );
-    });
+    WebSocket->OnConnected().AddLambda(
+        [WeakThis, ThisGeneration]()
+        {
+            /*
+             * Los callbacks de red no modifican directamente el UObject.
+             * La confirmación del estado se realiza en Game Thread.
+             */
+            AsyncTask(
+                ENamedThreads::GameThread,
+                [WeakThis, ThisGeneration]()
+                {
+                    if (!WeakThis.IsValid())
+                    {
+                        return;
+                    }
+
+                    UCryptoFinanceSubsystem* Subsystem = WeakThis.Get();
+
+                    if (!Subsystem || Subsystem->bIsShuttingDown)
+                    {
+                        return;
+                    }
+
+                    Subsystem->HandleSocketConnected(ThisGeneration);
+                }
+            );
+        }
+    );
 
     // --------------------------------------------------------
     // CALLBACK: ERROR DE CONEXIÓN
     // --------------------------------------------------------
 
-    WebSocket->OnConnectionError().AddLambda([](const FString& Error)
-    {
-        UE_LOG(
-            LogTemp,
-            Error,
-            TEXT("[Vantage] Error de conexión WebSocket: %s"),
-            *Error
-        );
-    });
+    WebSocket->OnConnectionError().AddLambda(
+        [WeakThis, ThisGeneration](const FString& Error)
+        {
+            AsyncTask(
+                ENamedThreads::GameThread,
+                [WeakThis, ThisGeneration, Error]()
+                {
+                    if (!WeakThis.IsValid())
+                    {
+                        return;
+                    }
+
+                    UCryptoFinanceSubsystem* Subsystem = WeakThis.Get();
+
+                    if (!Subsystem || Subsystem->bIsShuttingDown)
+                    {
+                        return;
+                    }
+
+                    Subsystem->HandleConnectionFailure(
+                        ThisGeneration,
+                        FString::Printf(
+                            TEXT("Error de conexión: %s"),
+                            *Error
+                        )
+                    );
+                }
+            );
+        }
+    );
 
     // --------------------------------------------------------
     // CALLBACK: CONEXIÓN CERRADA
     // --------------------------------------------------------
 
     WebSocket->OnClosed().AddLambda(
-        [](int32 StatusCode, const FString& Reason, bool bWasClean)
+        [WeakThis, ThisGeneration](
+            int32 StatusCode,
+            const FString& Reason,
+            bool bWasClean)
         {
-            UE_LOG(
-                LogTemp,
-                Warning,
-                TEXT("[Vantage] WebSocket cerrado. Código: %d. Razón: %s. Cierre limpio: %s"),
+            const FString CloseDescription = FString::Printf(
+                TEXT("WebSocket cerrado. Código: %d. Razón: %s. Cierre limpio: %s"),
                 StatusCode,
                 *Reason,
                 bWasClean ? TEXT("Sí") : TEXT("No")
+            );
+
+            AsyncTask(
+                ENamedThreads::GameThread,
+                [WeakThis, ThisGeneration, CloseDescription]()
+                {
+                    if (!WeakThis.IsValid())
+                    {
+                        return;
+                    }
+
+                    UCryptoFinanceSubsystem* Subsystem = WeakThis.Get();
+
+                    if (!Subsystem || Subsystem->bIsShuttingDown)
+                    {
+                        return;
+                    }
+
+                    Subsystem->HandleConnectionFailure(
+                        ThisGeneration,
+                        CloseDescription
+                    );
+                }
             );
         }
     );
@@ -251,21 +372,17 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
     // --------------------------------------------------------
 
     /*
-     * El callback de red puede ejecutarse fuera del Game Thread.
-     * Capturamos una referencia débil para no prolongar la vida del UObject
-     * ni acceder a sus miembros desde el hilo de recepción.
+     * El callback puede ejecutarse fuera del Game Thread.
+     * Copiamos el mensaje y lo procesamos en el hilo principal.
+     * También validamos la generación para descartar mensajes de sockets viejos.
      */
-    const TWeakObjectPtr<UCryptoFinanceSubsystem> WeakThis(this);
-
     WebSocket->OnMessage().AddLambda(
-        [WeakThis](const FString& MessageString)
+        [WeakThis, ThisGeneration](const FString& MessageString)
         {
-            // La cadena se copia a la tarea que se ejecutará en Game Thread.
             AsyncTask(
                 ENamedThreads::GameThread,
-                [WeakThis, MessageString]()
+                [WeakThis, ThisGeneration, MessageString]()
                 {
-                    // El subsistema pudo destruirse mientras la tarea esperaba.
                     if (!WeakThis.IsValid())
                     {
                         return;
@@ -273,8 +390,10 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
 
                     UCryptoFinanceSubsystem* Subsystem = WeakThis.Get();
 
-                    // También descartamos tareas si el cierre ya comenzó.
-                    if (!Subsystem || Subsystem->bIsShuttingDown)
+                    if (!Subsystem ||
+                        Subsystem->bIsShuttingDown ||
+                        !Subsystem->IsCurrentConnection(ThisGeneration) ||
+                        Subsystem->ConnectionState != EConnectionState::Connected)
                     {
                         return;
                     }
@@ -285,8 +404,193 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
         }
     );
 
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[Vantage] Iniciando conexión WebSocket. Generación: %llu"),
+        ThisGeneration
+    );
+
     // Los callbacks quedan registrados antes de iniciar la conexión.
     WebSocket->Connect();
+}
+
+
+/**
+ * HandleSocketConnected
+ *
+ * Confirma que la conexión correspondiente a la generación indicada sigue
+ * siendo la conexión vigente. Solo entonces actualiza el estado y reinicia
+ * el contador de reintentos consecutivos.
+ */
+void UCryptoFinanceSubsystem::HandleSocketConnected(uint64 ConnectedGeneration)
+{
+    if (bIsShuttingDown || !IsCurrentConnection(ConnectedGeneration))
+    {
+        return;
+    }
+
+    ConnectionState = EConnectionState::Connected;
+    ReconnectAttempt = 0;
+
+    // Si existía un reintento pendiente, ya no es necesario.
+    if (ReconnectTickerHandle.IsValid())
+    {
+        FTSTicker::GetCoreTicker().RemoveTicker(ReconnectTickerHandle);
+        ReconnectTickerHandle.Reset();
+    }
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[Vantage] Conectado a Binance. Generación: %llu"),
+        ConnectedGeneration
+    );
+}
+
+
+/**
+ * HandleConnectionFailure
+ *
+ * Centraliza el tratamiento de errores y cierres inesperados.
+ *
+ * Primero verifica que el evento pertenezca al socket vigente. Después
+ * invalida esa generación, libera el socket anterior y programa un único
+ * reintento.
+ *
+ * Si OnConnectionError y OnClosed llegan casi juntos, el segundo evento
+ * será descartado por la validación de generación.
+ */
+void UCryptoFinanceSubsystem::HandleConnectionFailure(
+    uint64 FailedGeneration,
+    const FString& Reason)
+{
+    if (bIsShuttingDown || !IsCurrentConnection(FailedGeneration))
+    {
+        return;
+    }
+
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("[Vantage] Conexión perdida. %s"),
+        *Reason
+    );
+
+    // Invalidar inmediatamente los callbacks que pertenezcan a este socket.
+    ++ConnectionGeneration;
+
+    // Marcar el subsistema como desconectado antes de liberar el socket.
+    ConnectionState = EConnectionState::Disconnected;
+
+    if (WebSocket.IsValid())
+    {
+        /*
+         * Se conserva una referencia local durante Close().
+         * Si el cierre dispara OnClosed, su generación ya no será válida
+         * y no duplicará el proceso de reconexión.
+         */
+        TSharedPtr<IWebSocket> FailedSocket = WebSocket;
+        WebSocket.Reset();
+
+        if (FailedSocket->IsConnected())
+        {
+            FailedSocket->Close();
+        }
+    }
+
+    ScheduleReconnect();
+}
+
+
+/**
+ * ScheduleReconnect
+ *
+ * Programa un solo reintento mediante el CoreTicker.
+ *
+ * Backoff exponencial:
+ * 1 s -> 2 s -> 4 s -> 8 s -> 16 s -> 30 s -> 30 s...
+ *
+ * No existe un límite de intentos. El intervalo sí tiene un máximo para
+ * evitar una frecuencia excesiva de solicitudes al servidor.
+ */
+void UCryptoFinanceSubsystem::ScheduleReconnect()
+{
+    if (bIsShuttingDown ||
+        ConnectionState == EConnectionState::ShuttingDown ||
+        ReconnectTickerHandle.IsValid())
+    {
+        return;
+    }
+
+    const float ExponentialDelay =
+        ReconnectBaseDelay * FMath::Pow(2.0f, static_cast<float>(ReconnectAttempt));
+
+    const float Delay = FMath::Min(
+        ExponentialDelay,
+        ReconnectMaxDelay
+    );
+
+    ++ReconnectAttempt;
+    ConnectionState = EConnectionState::Reconnecting;
+
+    UE_LOG(
+        LogTemp,
+        Warning,
+        TEXT("[Vantage] Próximo intento de reconexión en %.1f segundos. Intento: %d"),
+        Delay,
+        ReconnectAttempt
+    );
+
+    ReconnectTickerHandle = FTSTicker::GetCoreTicker().AddTicker(
+        FTickerDelegate::CreateUObject(
+            this,
+            &UCryptoFinanceSubsystem::HandleReconnectTimer
+        ),
+        Delay
+    );
+}
+
+
+/**
+ * HandleReconnectTimer
+ *
+ * Callback de una sola ejecución. Limpia su propio handle y comienza un
+ * nuevo intento de conexión. Devuelve false para que FTSTicker no lo repita.
+ */
+bool UCryptoFinanceSubsystem::HandleReconnectTimer(float DeltaTime)
+{
+    ReconnectTickerHandle.Reset();
+
+    if (bIsShuttingDown ||
+        ConnectionState == EConnectionState::ShuttingDown)
+    {
+        return false;
+    }
+
+    UE_LOG(
+        LogTemp,
+        Log,
+        TEXT("[Vantage] Ejecutando intento de reconexión %d."),
+        ReconnectAttempt
+    );
+
+    ConnectWebSocket();
+
+    // Es un temporizador de una sola ejecución; el próximo fallo lo programa otra vez.
+    return false;
+}
+
+
+/**
+ * IsCurrentConnection
+ *
+ * Verifica si un callback todavía pertenece al socket vigente.
+ * La generación solo se modifica en Game Thread.
+ */
+bool UCryptoFinanceSubsystem::IsCurrentConnection(uint64 CandidateGeneration) const
+{
+    return CandidateGeneration == ConnectionGeneration;
 }
 
 
@@ -298,8 +602,8 @@ void UCryptoFinanceSubsystem::ConnectWebSocket()
  * ProcessWebSocketMessage
  *
  * Deserializa un arreglo miniTicker y actualiza solamente los símbolos
- * configurados. Se ejecuta en Game Thread, pero Mutex se conserva para
- * proteger el caché ante futuros consumidores o rutas de acceso concurrentes.
+ * configurados. Se ejecuta en Game Thread; Mutex protege el caché y la bandera
+ * de actualización frente a futuras rutas de acceso concurrentes.
  */
 void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageString)
 {
@@ -308,6 +612,7 @@ void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageStri
     // --------------------------------------------------------
 
     TArray<TSharedPtr<FJsonValue>> JsonArray;
+
     const TSharedRef<TJsonReader<>> Reader =
         TJsonReaderFactory<>::Create(MessageString);
 
@@ -318,6 +623,7 @@ void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageStri
             Warning,
             TEXT("[Vantage] No se pudo deserializar un mensaje de Binance.")
         );
+
         return;
     }
 
@@ -368,8 +674,7 @@ void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageStri
 
             /*
              * AllowedSymbols se creó durante Initialize() y es de solo
-             * lectura durante el procesamiento normal. Si está vacío,
-             * ningún símbolo se considera permitido.
+             * lectura durante el procesamiento normal.
              */
             if (!AllowedSymbols.Contains(Symbol))
             {
@@ -426,6 +731,7 @@ void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageStri
             // ------------------------------------------------
 
             FCryptoAssetData AssetData;
+
             AssetData.Symbol = Symbol;
             AssetData.LastPrice = LastPrice;
             AssetData.HighPrice = HighPrice;
@@ -449,13 +755,11 @@ void UCryptoFinanceSubsystem::ProcessWebSocketMessage(const FString& MessageStri
             /*
              * Add agrega el elemento si la clave no existe o reemplaza
              * el valor anterior si el símbolo ya estaba almacenado.
-             * El TMap continúa siendo la única fuente de datos de mercado.
              */
             AssetCache.Add(Symbol, MoveTemp(AssetData));
             bUpdatedAny = true;
         }
 
-        // La bandera se activa solamente si hubo al menos una actualización.
         if (bUpdatedAny)
         {
             bNewDataReceived = true;
@@ -499,9 +803,6 @@ void UCryptoFinanceSubsystem::SetupTicker()
  *
  * Comprueba si llegaron datos nuevos. Cuando corresponde, construye una
  * instantánea ordenada y emite el delegado fuera del bloqueo.
- *
- * La instantánea es necesaria porque el delegado recibe un array y los
- * consumidores deben observar una colección consistente durante Broadcast().
  */
 bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
 {
@@ -522,9 +823,8 @@ bool UCryptoFinanceSubsystem::HandleTicker(float DeltaTime)
             bShouldBroadcast = true;
 
             /*
-             * Construimos el snapshot recorriendo TargetSymbols. Así el evento
-             * entrega un orden determinista y no depende del orden interno del
-             * TMap. No agregamos placeholders al evento: solo se distribuyen
+             * Se recorre TargetSymbols para entregar un orden determinista.
+             * No se agregan placeholders al evento: solo se distribuyen
              * activos para los que ya se recibió información real.
              */
             BuildOrderedSnapshot(SnapshotList, false);
@@ -571,15 +871,10 @@ void UCryptoFinanceSubsystem::BuildOrderedSnapshot(
 
         if (const FCryptoAssetData* Found = AssetCache.Find(Symbol))
         {
-            // Copiamos el registro al snapshot de salida.
             OutAssets.Add(*Found);
         }
         else if (bIncludePlaceholders)
         {
-            /*
-             * La posición se conserva aunque todavía no haya llegado una
-             * cotización. Los valores numéricos permanecen inicializados en cero.
-             */
             FCryptoAssetData Placeholder;
             Placeholder.Symbol = Symbol;
             OutAssets.Add(MoveTemp(Placeholder));
@@ -596,8 +891,8 @@ void UCryptoFinanceSubsystem::BuildOrderedSnapshot(
  * GetAssetData
  *
  * Busca un activo por símbolo y devuelve una copia independiente de su registro.
- * No se expone un puntero interno al TMap para evitar que el consumidor conserve
- * una referencia que podría invalidarse cuando el mapa se modifique.
+ * No se expone un puntero interno al TMap para evitar referencias que podrían
+ * invalidarse cuando el mapa se modifique.
  */
 bool UCryptoFinanceSubsystem::GetAssetData(
     const FString& Symbol,
@@ -627,8 +922,7 @@ bool UCryptoFinanceSubsystem::GetAssetData(
  * GetAllAssets
  *
  * Devuelve los activos que ya recibieron datos, respetando TargetSymbols.
- * A diferencia de GenerateValueArray(), esta implementación no depende del
- * orden interno del TMap.
+ * No depende del orden interno del TMap.
  */
 void UCryptoFinanceSubsystem::GetAllAssets(TArray<FCryptoAssetData>& OutAssets)
 {
