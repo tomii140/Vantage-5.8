@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -10,11 +9,8 @@
 /**
  * FCryptoAssetData
  *
- * Contiene la última información de mercado conocida para un activo.
- * Binance identifica cada mercado mediante un símbolo, por ejemplo BTCUSDT.
- *
- * Los valores numéricos comienzan en cero. Esto permite crear estructuras
- * provisionales para activos que todavía no recibieron su primer mensaje.
+ * Almacena la última información de mercado recibida para un activo.
+ * Los valores comienzan en cero para permitir la creación de placeholders.
  */
 USTRUCT(BlueprintType)
 struct FCryptoAssetData
@@ -25,11 +21,11 @@ struct FCryptoAssetData
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     FString Symbol;
 
-    /** Último precio informado por Binance (campo JSON "c"). */
+    /** Último precio informado por Binance. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double LastPrice = 0.0;
 
-    /** Variación absoluta respecto del precio de apertura (c - o). */
+    /** Variación absoluta respecto del precio de apertura. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChange = 0.0;
 
@@ -37,25 +33,24 @@ struct FCryptoAssetData
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double PriceChangePercent = 0.0;
 
-    /** Precio máximo del período informado (campo JSON "h"). */
+    /** Precio máximo del período informado. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double HighPrice = 0.0;
 
-    /** Precio mínimo del período informado (campo JSON "l"). */
+    /** Precio mínimo del período informado. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double LowPrice = 0.0;
 
-    /** Volumen negociado del período informado (campo JSON "v"). */
+    /** Volumen negociado del período informado. */
     UPROPERTY(BlueprintReadWrite, Category = "Vantage|Finance")
     double Volume = 0.0;
 };
 
 /**
- * Evento emitido cuando hay información financiera nueva para distribuir.
+ * Evento emitido cuando hay información financiera nueva.
  *
- * El array se entrega como referencia constante durante la ejecución del
- * delegado. Los consumidores que necesiten conservarlo deben hacer su propia
- * copia; no deben guardar una referencia al parámetro.
+ * El array se entrega como referencia constante durante la ejecución
+ * del delegado. Los consumidores que necesiten conservarlo deben copiarlo.
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
     FOnCryptoDataUpdated,
@@ -66,17 +61,14 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 /**
  * UCryptoFinanceSubsystem
  *
- * Subsistema central de recepción, almacenamiento y distribución de datos
- * financieros. Su ciclo de vida está asociado al GameInstance.
+ * Subsistema central de recepción, almacenamiento y distribución
+ * de datos financieros. Su ciclo de vida está asociado al GameInstance.
  *
  * ARQUITECTURA DE DATOS:
  *
- * - TargetSymbols (TArray): catálogo ordenado y fuente de verdad para la UI.
- * - AllowedSymbols (TSet): filtro de pertenencia rápida, construido una vez.
- * - AssetCache (TMap): almacenamiento principal y búsqueda por símbolo.
- *
- * No se mantiene una segunda colección ordenada: el orden se obtiene
- * recorriendo TargetSymbols y consultando AssetCache.
+ * - TargetSymbols: catálogo ordenado y fuente de verdad para la UI.
+ * - AllowedSymbols: filtro de pertenencia rápida, construido una vez.
+ * - AssetCache: almacenamiento principal y búsqueda por símbolo.
  *
  * ARQUITECTURA DE CONEXIÓN:
  *
@@ -84,10 +76,15 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * - Reintenta automáticamente ante errores y cierres inesperados.
  * - Utiliza backoff exponencial con un máximo de 30 segundos.
  * - Asigna una generación a cada conexión para descartar callbacks antiguos.
- * - Cancela los reintentos durante Deinitialize().
+ * - Utiliza un watchdog para detectar conexiones sin recepción de mensajes.
+ * - Cancela los tickers y las reconexiones durante Deinitialize().
  *
- * Los callbacks de red transfieren su procesamiento al Game Thread antes de
- * modificar el estado del UObject o del caché.
+ * SEGURIDAD:
+ *
+ * - Los callbacks de red no modifican directamente el UObject.
+ * - El procesamiento se transfiere al Game Thread.
+ * - Las generaciones invalidan callbacks de conexiones anteriores.
+ * - Mutex protege el caché y el estado de distribución.
  */
 UCLASS()
 class VANTAGE_API UCryptoFinanceSubsystem : public UGameInstanceSubsystem
@@ -100,10 +97,10 @@ public:
     // CICLO DE VIDA
     // ------------------------------------------------------------
 
-    /** Inicializa el catálogo, el filtro, la conexión y el ticker. */
+    /** Inicializa catálogo, filtros, conexión y tickers. */
     virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-    /** Detiene los tickers y cierra/libera la conexión antes de destruirse. */
+    /** Detiene los tickers y cierra la conexión antes de destruirse. */
     virtual void Deinitialize() override;
 
 
@@ -111,7 +108,7 @@ public:
     // EVENTOS PÚBLICOS
     // ------------------------------------------------------------
 
-    /** Se emite cuando se detecta información nueva de los activos configurados. */
+    /** Se emite cuando se detecta información nueva de los activos. */
     UPROPERTY(BlueprintAssignable, Category = "Vantage|Events")
     FOnCryptoDataUpdated OnCryptoDataUpdated;
 
@@ -123,16 +120,15 @@ public:
     /**
      * Catálogo de activos que Vantage debe procesar y visualizar.
      *
-     * El orden de esta lista determina el orden estable de las consultas
-     * ordenadas y, por lo tanto, el orden utilizado para paginar los slots.
-     * Los símbolos se normalizan y se eliminan duplicados durante Initialize().
+     * El orden determina el orden de las consultas y la paginación.
+     * Los símbolos se normalizan y deduplican durante Initialize().
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Catalog")
     TArray<FString> TargetSymbols;
 
     /**
      * Intervalo de distribución del delegado, en segundos.
-     * No controla la frecuencia de mensajes enviada por Binance.
+     * No controla la frecuencia de mensajes de Binance.
      */
     UPROPERTY(
         EditAnywhere,
@@ -149,23 +145,24 @@ public:
 
     /**
      * Busca un activo por símbolo.
-     * @param Symbol Identificador del mercado; se normaliza antes de buscar.
-     * @param OutData Recibe una copia de los datos si el activo existe.
-     * @return true si se encontró el activo; false en caso contrario.
+     *
+     * @param Symbol Identificador del mercado.
+     * @param OutData Recibe una copia de los datos encontrados.
+     * @return true si el activo existe.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     bool GetAssetData(const FString& Symbol, FCryptoAssetData& OutData);
 
     /**
      * Devuelve los activos recibidos actualmente.
-     * La salida respeta el orden de TargetSymbols y no incluye placeholders.
+     * Respeta el orden de TargetSymbols y no incluye placeholders.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetAllAssets(TArray<FCryptoAssetData>& OutAssets);
 
     /**
-     * Devuelve todos los símbolos configurados en el orden de TargetSymbols.
-     * Los activos todavía no recibidos se representan mediante placeholders.
+     * Devuelve todos los símbolos configurados.
+     * Incluye placeholders para activos todavía no recibidos.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Finance")
     void GetOrderedTargetAssets(TArray<FCryptoAssetData>& OutOrderedAssets);
@@ -177,10 +174,7 @@ private:
     // ESTADO DE CONEXIÓN
     // ------------------------------------------------------------
 
-    /**
-     * Estados internos del ciclo de vida del WebSocket.
-     * El estado se modifica exclusivamente desde el Game Thread.
-     */
+    /** Estados internos del ciclo de vida del WebSocket. */
     enum class EConnectionState : uint8
     {
         Disconnected,
@@ -190,20 +184,49 @@ private:
         ShuttingDown
     };
 
-    /** Estado actual de la conexión. */
+    /** Estado actual de la conexión. Solo se modifica en Game Thread. */
     EConnectionState ConnectionState = EConnectionState::Disconnected;
 
-    /** Identificador incremental para invalidar callbacks de sockets anteriores. */
+    /** Identificador incremental para invalidar callbacks antiguos. */
     uint64 ConnectionGeneration = 0;
 
     /** Cantidad de reintentos consecutivos desde la última conexión exitosa. */
     int32 ReconnectAttempt = 0;
 
-    /** Espera inicial antes del primer reintento, expresada en segundos. */
+    /** Espera inicial antes del primer reintento. */
     static constexpr float ReconnectBaseDelay = 1.0f;
 
-    /** Espera máxima entre intentos consecutivos, expresada en segundos. */
+    /** Espera máxima entre intentos consecutivos. */
     static constexpr float ReconnectMaxDelay = 30.0f;
+
+
+    // ------------------------------------------------------------
+    // CONFIGURACIÓN DEL WATCHDOG
+    // ------------------------------------------------------------
+
+    /**
+     * Frecuencia de comprobación del watchdog.
+     * No representa la frecuencia de recepción de datos.
+     */
+    static constexpr float WatchdogCheckInterval = 2.0f;
+
+    /**
+     * Tiempo máximo sin mensajes antes de considerar inactiva
+     * una conexión que ya había sido establecida.
+     */
+    static constexpr double MessageTimeoutSeconds = 15.0;
+
+    /**
+     * Tiempo máximo permitido para completar el handshake.
+     * Evita que una conexión quede indefinidamente en Connecting.
+     */
+    static constexpr double ConnectionTimeoutSeconds = 15.0;
+
+    /** Momento de recepción del último mensaje, medido en segundos. */
+    double LastMessageTimeSeconds = 0.0;
+
+    /** Momento en que comenzó el intento de conexión actual. */
+    double ConnectionStartedAtSeconds = 0.0;
 
 
     // ------------------------------------------------------------
@@ -213,26 +236,40 @@ private:
     /** Crea el cliente WebSocket y registra sus callbacks. */
     void ConnectWebSocket();
 
-    /** Programa un único intento de reconexión con espera progresiva. */
+    /** Programa un único intento de reconexión con backoff. */
     void ScheduleReconnect();
 
     /** Callback de una sola ejecución que inicia el siguiente intento. */
     bool HandleReconnectTimer(float DeltaTime);
 
-    /** Invalida la conexión fallida y programa su reemplazo. */
+    /** Invalida una conexión fallida y programa su reemplazo. */
     void HandleConnectionFailure(uint64 FailedGeneration, const FString& Reason);
 
     /** Confirma una conexión exitosa si pertenece a la generación actual. */
     void HandleSocketConnected(uint64 ConnectedGeneration);
 
-    /** Comprueba si un callback todavía pertenece al socket vigente. */
+    /** Comprueba si un callback pertenece al socket vigente. */
     bool IsCurrentConnection(uint64 CandidateGeneration) const;
 
     /**
      * Procesa un mensaje JSON de Binance.
-     * Esta función se ejecuta exclusivamente en el Game Thread.
+     * Se ejecuta exclusivamente en Game Thread.
      */
     void ProcessWebSocketMessage(const FString& MessageString);
+
+
+    // ------------------------------------------------------------
+    // SUPERVISIÓN DE CONEXIÓN
+    // ------------------------------------------------------------
+
+    /** Registra el ticker periódico del watchdog. */
+    void SetupWatchdogTicker();
+
+    /**
+     * Comprueba el tiempo transcurrido desde el último mensaje.
+     * También detecta intentos de conexión que no completan el handshake.
+     */
+    bool HandleWatchdogTicker(float DeltaTime);
 
 
     // ------------------------------------------------------------
@@ -243,7 +280,7 @@ private:
     void SetupTicker();
 
     /**
-     * Comprueba si hay datos nuevos y emite el delegado cuando corresponde.
+     * Comprueba si hay datos nuevos y emite el delegado.
      * @return true para mantener el ticker registrado.
      */
     bool HandleTicker(float DeltaTime);
@@ -254,8 +291,8 @@ private:
     // ------------------------------------------------------------
 
     /**
-     * Construye una instantánea siguiendo el orden de TargetSymbols.
-     * El llamador debe mantener Mutex adquirido durante la llamada.
+     * Construye una instantánea siguiendo TargetSymbols.
+     * El llamador debe mantener Mutex adquirido.
      */
     void BuildOrderedSnapshot(
         TArray<FCryptoAssetData>& OutAssets,
@@ -263,13 +300,11 @@ private:
     ) const;
 
 
-private:
-
     // ------------------------------------------------------------
     // RECURSOS DE RED
     // ------------------------------------------------------------
 
-    /** Cliente compartido de WebSocket utilizado para comunicarse con Binance. */
+    /** Cliente compartido de WebSocket utilizado para Binance. */
     TSharedPtr<IWebSocket> WebSocket;
 
 
@@ -280,10 +315,7 @@ private:
     /** Caché principal: símbolo -> datos actuales. */
     TMap<FString, FCryptoAssetData> AssetCache;
 
-    /**
-     * Conjunto de símbolos aceptados por el filtro de entrada.
-     * Se construye una sola vez durante Initialize().
-     */
+    /** Filtro de símbolos permitidos, construido durante Initialize(). */
     TSet<FString> AllowedSymbols;
 
 
@@ -299,15 +331,18 @@ private:
     // TICKERS Y ESTADO DEL SUBSISTEMA
     // ------------------------------------------------------------
 
-    /** Handle del callback periódico que distribuye datos a los consumidores. */
+    /** Handle del ticker que distribuye datos. */
     FTSTicker::FDelegateHandle TickerHandle;
 
-    /** Handle del callback de una sola ejecución para reintentar la conexión. */
+    /** Handle del ticker que programa reconexiones. */
     FTSTicker::FDelegateHandle ReconnectTickerHandle;
+
+    /** Handle del ticker que supervisa la conexión. */
+    FTSTicker::FDelegateHandle WatchdogTickerHandle;
 
     /** Indica que hay datos nuevos pendientes de distribuir. */
     bool bNewDataReceived = false;
 
-    /** Impide iniciar conexiones o procesar tareas después del cierre. */
+    /** Impide iniciar conexiones o procesar tareas durante el cierre. */
     bool bIsShuttingDown = false;
 };
