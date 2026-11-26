@@ -1,4 +1,7 @@
-﻿#include "ACryptoSlotActor.h"
+﻿
+
+
+#include "ACryptoSlotActor.h"
 
 // Componentes.
 #include "Components/SceneComponent.h"
@@ -101,7 +104,7 @@ void ACryptoSlotActor::BeginPlay()
     UE_LOG(
         LogTemp,
         Warning,
-        TEXT("[Vantage][Slot][TRACE] BeginPlay | Actor: %s | IconPlane válido: %s | Materiales: %d | Símbolo ya inicializado: %s"),
+        TEXT("[Vantage][Slot][TRACE] BeginPlay | Actor: %s | IconPlane válido: %s | Materiales: %d | Símbolo inicializado: %s"),
         *GetName(),
         IsValid(IconPlaneComponent) ? TEXT("SI") : TEXT("NO"),
         IsValid(IconPlaneComponent) ? IconPlaneComponent->GetNumMaterials() : 0,
@@ -135,27 +138,31 @@ void ACryptoSlotActor::BeginPlay()
 /**
  * InitSlot
  *
- * Recibe los datos financieros y la textura correspondiente.
+ * Recibe los datos financieros, la textura y la KEY identificadora.
  *
  * IMPORTANTE:
- * Cada instancia de ACryptoSlotActor mantiene su propia textura
- * y su propia instancia dinámica del material.
+ * El símbolo original del mercado no se modifica.
  *
- * Por lo tanto:
- * BTC puede mostrar Bitcoin.png mientras ETH muestra Ethereum.png,
- * sin modificar el material original compartido.
+ * Ejemplo:
+ * AssetData.Symbol = BTCUSDT
+ * AssetKey = BTC
+ *
+ * Cada slot conserva su propia información y su propia instancia
+ * dinámica del material.
  */
 void ACryptoSlotActor::InitSlot(
     const FCryptoAssetData& AssetData,
-    UTexture2D* IconTexture
+    UTexture2D* IconTexture,
+    const FString& AssetKey
 )
 {
     UE_LOG(
         LogTemp,
         Warning,
-        TEXT("[Vantage][Slot][TRACE] InitSlot | Actor: %s | Símbolo: '%s' | Textura recibida: %s | MID existente: %s"),
+        TEXT("[Vantage][Slot][TRACE] InitSlot | Actor: %s | Symbol: '%s' | AssetKey: '%s' | Texture: %s | MID existente: %s"),
         *GetName(),
         *AssetData.Symbol,
+        *AssetKey,
         *GetNameSafe(IconTexture),
         IsValid(DynamicIconMaterial) ? TEXT("SI") : TEXT("NO")
     );
@@ -165,6 +172,9 @@ void ACryptoSlotActor::InitSlot(
     // --------------------------------------------------------
 
     CurrentAssetData = AssetData;
+
+    // Guardar la KEY resuelta por el terminal.
+    CurrentAssetKey = AssetKey;
 
     // Guardar la referencia de la textura recibida.
     CurrentIconTexture = IconTexture;
@@ -194,17 +204,23 @@ void ACryptoSlotActor::InitSlot(
     // --------------------------------------------------------
 
     /*
-     * Este evento permite actualizar los textos del Widget.
-     * La lógica visual de los textos continúa en WBP_CryptoSlot.
+     * Se notifican los dos valores en el mismo evento.
+     *
+     * AssetData actualiza WBP_CryptoSlot.
+     * AssetKey actualiza WBP_CryptoKey.
      */
-    BP_OnSlotDataUpdated(CurrentAssetData);
+    BP_OnSlotDataUpdated(
+        CurrentAssetData,
+        CurrentAssetKey
+    );
 
     UE_LOG(
         LogTemp,
         Warning,
-        TEXT("[Vantage][Slot][TRACE] InitSlot finalizado | Actor: %s | Símbolo: '%s' | Textura guardada: %s | MID válido: %s"),
+        TEXT("[Vantage][Slot][TRACE] InitSlot finalizado | Actor: %s | Symbol: '%s' | AssetKey: '%s' | Texture: %s | MID válido: %s"),
         *GetName(),
         *CurrentAssetData.Symbol,
+        *CurrentAssetKey,
         *GetNameSafe(CurrentIconTexture),
         IsValid(DynamicIconMaterial) ? TEXT("SI") : TEXT("NO")
     );
@@ -228,6 +244,20 @@ FCryptoAssetData ACryptoSlotActor::GetCurrentAssetData() const
 }
 
 
+/**
+ * GetCurrentAssetKey
+ *
+ * Devuelve la KEY identificadora almacenada en el slot.
+ *
+ * Ejemplo:
+ * BTCUSDT -> BTC
+ */
+FString ACryptoSlotActor::GetCurrentAssetKey() const
+{
+    return CurrentAssetKey;
+}
+
+
 // ============================================================
 // CREACIÓN DEL MATERIAL DINÁMICO
 // ============================================================
@@ -237,13 +267,7 @@ FCryptoAssetData ACryptoSlotActor::GetCurrentAssetData() const
  *
  * Crea una instancia dinámica del material del IconPlaneComponent.
  *
- * ¿POR QUÉ UTILIZAMOS UN MATERIAL DINÁMICO?
- *
  * El material original puede estar compartido por los 25 slots.
- *
- * Si modificáramos directamente el material original,
- * podríamos terminar cambiando el logo de todos los slots.
- *
  * La instancia dinámica permite que cada slot tenga su propia
  * textura sin modificar los demás.
  */
@@ -286,6 +310,7 @@ void ACryptoSlotActor::CreateDynamicIconMaterial()
             *GetName(),
             *GetNameSafe(DynamicIconMaterial)
         );
+
         return;
     }
 
@@ -365,10 +390,7 @@ void ACryptoSlotActor::CreateDynamicIconMaterial()
         *TextureParameterName.ToString()
     );
 
-    /*
-     * Una nueva instancia dinámica debe recibir la textura actual,
-     * aunque sea la misma textura que se había aplicado anteriormente.
-     */
+    // Una nueva instancia debe recibir nuevamente la textura actual.
     LastAppliedIconTexture = nullptr;
 
     UE_LOG(
@@ -397,9 +419,6 @@ void ACryptoSlotActor::CreateDynamicIconMaterial()
  * - Si no existe textura, informa qué símbolo no tiene imagen.
  * - Si no existe material dinámico, informa el problema.
  * - Si la textura cambia, registra cuál se aplicó.
- *
- * Los mensajes permiten distinguir un problema de búsqueda
- * de un problema de inicialización del material.
  */
 void ACryptoSlotActor::ApplyIconTexture()
 {

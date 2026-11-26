@@ -18,10 +18,11 @@ class UTexture2D;
  *
  * RESPONSABILIDADES:
  * - Mantener los datos financieros asignados al slot.
+ * - Recibir la KEY identificadora del activo.
  * - Recibir la textura correspondiente a la criptomoneda.
  * - Crear una instancia dinámica e independiente del material.
  * - Aplicar la textura al plano 3D del icono.
- * - Notificar a Blueprint cuando cambian los datos.
+ * - Notificar a Blueprint cuando cambian los datos y la KEY.
  *
  * El Actor no consulta Binance ni accede directamente al Subsystem.
  * Recibe los datos desde ACryptoTerminalActor.
@@ -47,18 +48,24 @@ public:
     /**
      * Inicializa o actualiza el contenido del slot.
      *
-     * @param AssetData Datos financieros del activo.
-     * @param IconTexture Textura PNG importada como Texture2D.
+     * @param AssetData Datos financieros originales del activo.
+     * @param IconTexture Textura correspondiente a la criptomoneda.
+     * @param AssetKey Abreviación identificadora, por ejemplo BTC.
      */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Slot")
     virtual void InitSlot(
         const FCryptoAssetData& AssetData,
-        UTexture2D* IconTexture
+        UTexture2D* IconTexture,
+        const FString& AssetKey
     );
 
     /** Devuelve una copia de los datos actuales del slot. */
     UFUNCTION(BlueprintPure, Category = "Vantage|Slot")
     FCryptoAssetData GetCurrentAssetData() const;
+
+    /** Devuelve la KEY identificadora del activo actual. */
+    UFUNCTION(BlueprintPure, Category = "Vantage|Slot")
+    FString GetCurrentAssetKey() const;
 
 protected:
 
@@ -91,7 +98,6 @@ protected:
     /**
      * Nombre del parámetro Texture2D del material.
      *
-     * IMPORTANTE:
      * Debe coincidir exactamente con el nombre del parámetro
      * Texture Sample Parameter2D del material.
      */
@@ -119,17 +125,20 @@ protected:
     // ------------------------------------------------------------
 
     /**
-     * Notifica a Blueprint que el slot recibió datos nuevos.
+     * Notifica a Blueprint que el slot recibió información nueva.
      *
-     * Se utiliza para actualizar el Widget:
-     * - Símbolo.
-     * - Nombre.
-     * - Precio.
-     * - Variación porcentual.
-     * - Otros valores financieros.
+     * AssetData conserva el símbolo original del mercado, por ejemplo
+     * BTCUSDT. AssetKey contiene la abreviación visual, por ejemplo BTC.
+     *
+     * Blueprint puede utilizar ambos parámetros para actualizar:
+     * - WBP_CryptoSlot.
+     * - WBP_CryptoKey.
      */
     UFUNCTION(BlueprintImplementableEvent, Category = "Vantage|Slot|Events")
-    void BP_OnSlotDataUpdated(const FCryptoAssetData& AssetData);
+    void BP_OnSlotDataUpdated(
+        const FCryptoAssetData& AssetData,
+        const FString& AssetKey
+    );
 
 private:
 
@@ -144,6 +153,10 @@ private:
     /** Datos financieros actuales del slot. */
     UPROPERTY(Transient)
     FCryptoAssetData CurrentAssetData;
+
+    /** KEY identificadora actual, por ejemplo BTC, ETH o BNB. */
+    UPROPERTY(Transient)
+    FString CurrentAssetKey;
 
     /** Textura recibida desde el terminal. */
     UPROPERTY(Transient)

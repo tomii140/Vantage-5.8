@@ -8,6 +8,8 @@
 
 class ACryptoSlotActor;
 class UTexture2D;
+class USceneComponent;
+class UWidgetComponent;
 
 /**
  * Modos disponibles para distribuir espacialmente los slots.
@@ -23,9 +25,6 @@ enum class ETerminalMode : uint8
 
 /**
  * Evento emitido cuando se selecciona un activo.
- *
- * Se declara fuera de la clase para mantener el tipo de delegado
- * en el ámbito global y facilitar su procesamiento por UHT.
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
     FOnCryptoAssetSelected,
@@ -42,9 +41,10 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
  * - Obtener los datos del CryptoFinanceSubsystem.
  * - Crear y administrar los slots visibles.
  * - Distribuir los slots según el modo espacial seleccionado.
- * - Asignar las texturas de cada criptomoneda.
+ * - Resolver la KEY y la textura de cada criptomoneda.
  * - Actualizar los slots cuando el Subsystem emite datos nuevos.
- * - Administrar el desplazamiento entre páginas.
+ * - Administrar la paginación.
+ * - Crear y administrar el componente de navegación global.
  *
  * No procesa mensajes JSON ni administra conexiones WebSocket.
  */
@@ -65,10 +65,6 @@ public:
     // CONFIGURACIÓN GENERAL
     // ------------------------------------------------------------
 
-    /**
-     * Intervalo entre impresiones de información de depuración.
-     * No afecta a la frecuencia de actualización financiera.
-     */
     UPROPERTY(
         EditAnywhere,
         BlueprintReadWrite,
@@ -77,7 +73,6 @@ public:
     )
     float PrintInterval = 2.0f;
 
-    /** Activa o desactiva los mensajes de depuración en pantalla. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Debug")
     bool bEnableDebugOutput = true;
 
@@ -85,13 +80,12 @@ public:
     // CONFIGURACIÓN DE VISUALIZACIÓN
     // ------------------------------------------------------------
 
-    /** Modo espacial utilizado para distribuir los slots. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout")
     ETerminalMode CurrentLayoutMode = ETerminalMode::Mode3D_Horizontal;
 
     /**
      * Cantidad de slots visibles simultáneamente.
-     * El valor predeterminado conserva el comportamiento anterior.
+     * También determina cuántos activos contiene cada página.
      */
     UPROPERTY(
         EditAnywhere,
@@ -101,7 +95,6 @@ public:
     )
     int32 DisplaySlotCount = 5;
 
-    /** Separación entre slots en los modos lineales. */
     UPROPERTY(
         EditAnywhere,
         BlueprintReadWrite,
@@ -110,7 +103,6 @@ public:
     )
     float SlotSpacing = 120.0f;
 
-    /** Radio utilizado para distribuir slots en modo circular. */
     UPROPERTY(
         EditAnywhere,
         BlueprintReadWrite,
@@ -123,31 +115,41 @@ public:
     // CONFIGURACIÓN DE ACTORES
     // ------------------------------------------------------------
 
-    /** Clase Blueprint o C++ utilizada para crear cada slot. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     TSubclassOf<ACryptoSlotActor> BaseSlotClass;
 
     /**
-     * Relaciona símbolos de mercado con sus texturas.
-     *
-     * Las claves pueden escribirse en mayúsculas o minúsculas.
-     * El terminal normaliza los símbolos durante la búsqueda.
-     *
-     * También admite símbolos de mercado terminados en USDT.
-     * Por ejemplo, BTCUSDT puede utilizar la clave BTC.
+     * Relaciona las abreviaciones de las criptomonedas con sus texturas.
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     TMap<FString, TObjectPtr<UTexture2D>> CoinTextureMap;
 
-    /** Permite desactivar la creación de actores desde el editor. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     bool bSpawnSlotActors = true;
+
+    // ------------------------------------------------------------
+    // NAVEGACIÓN GLOBAL
+    // ------------------------------------------------------------
+
+    /**
+     * Componente visual único para la navegación del terminal.
+     *
+     * Su Widget Class se configura desde el editor con
+     * WBP_CryptoNavigation.
+     *
+     * No pertenece a ningún ACryptoSlotActor.
+     */
+    UPROPERTY(
+        VisibleAnywhere,
+        BlueprintReadOnly,
+        Category = "Vantage|Navigation"
+    )
+    TObjectPtr<UWidgetComponent> NavigationWidgetComponent;
 
     // ------------------------------------------------------------
     // EVENTOS PÚBLICOS
     // ------------------------------------------------------------
 
-    /** Evento que notifica qué criptomoneda fue seleccionada. */
     UPROPERTY(BlueprintAssignable, Category = "Vantage|Events")
     FOnCryptoAssetSelected OnCryptoAssetSelected;
 
@@ -155,18 +157,21 @@ public:
     // PAGINACIÓN
     // ------------------------------------------------------------
 
-    /**
-     * Establece el desplazamiento global de la lista.
-     * El límite superior se valida al actualizar los slots.
-     */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal")
     static void SetGlobalScrollOffset(int32 NewOffset);
 
-    /** Devuelve el desplazamiento global actual. */
     UFUNCTION(BlueprintPure, Category = "Vantage|Terminal")
     static int32 GetGlobalScrollOffset();
 
-    /** Fuerza una actualización de los slots visibles. */
+    UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal|Pagination")
+    void NavigatePage(int32 PageDelta);
+
+    UFUNCTION(BlueprintPure, Category = "Vantage|Terminal|Pagination")
+    int32 GetCurrentPageIndex() const;
+
+    UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal|Pagination")
+    int32 GetTotalPageCount();
+
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal")
     void RefreshTerminal();
 
@@ -174,20 +179,16 @@ public:
     // DISTRIBUCIÓN ESPACIAL
     // ------------------------------------------------------------
 
-    /**
-     * Calcula la posición relativa de un slot.
-     *
-     * @param Index Índice del slot dentro de la página visible.
-     * @param TotalElements Cantidad total de slots de la página.
-     */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Layout")
-    FVector CalculateSlotPosition(int32 Index, int32 TotalElements) const;
+    FVector CalculateSlotPosition(
+        int32 Index,
+        int32 TotalElements
+    ) const;
 
     // ------------------------------------------------------------
     // INTERACCIÓN
     // ------------------------------------------------------------
 
-    /** Procesa la selección de un activo por su símbolo. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Input")
     void HandleSlotTap(const FString& AssetSymbol);
 
@@ -207,12 +208,6 @@ protected:
     // EVENTOS DEL SUBSYSTEM
     // ------------------------------------------------------------
 
-    /**
-     * Recibe el evento de datos nuevos emitido por el Subsystem.
-     *
-     * Se ejecuta en Game Thread porque el Subsystem distribuye
-     * sus actualizaciones desde su ticker.
-     */
     UFUNCTION()
     void HandleCryptoDataUpdated(
         const TArray<FCryptoAssetData>& UpdatedAssets
@@ -224,10 +219,6 @@ public:
     // ACTUALIZACIÓN POR FRAME
     // ------------------------------------------------------------
 
-    /**
-     * Tick utilizado para detectar cambios en la paginación
-     * y, opcionalmente, mostrar información de depuración.
-     */
     virtual void Tick(float DeltaTime) override;
 
 private:
@@ -236,11 +227,9 @@ private:
     // REFERENCIAS A SISTEMAS Y ACTORES
     // ------------------------------------------------------------
 
-    /** Subsystem financiero utilizado por este terminal. */
     UPROPERTY(Transient)
     TObjectPtr<UCryptoFinanceSubsystem> FinanceSubsystem;
 
-    /** Actores que representan los slots actualmente visibles. */
     UPROPERTY(Transient)
     TArray<TObjectPtr<ACryptoSlotActor>> SpawnedSlots;
 
@@ -248,44 +237,53 @@ private:
     // ESTADO INTERNO
     // ------------------------------------------------------------
 
-    /** Tiempo acumulado desde la última impresión de depuración. */
     float TimeSinceLastPrint = 0.0f;
 
-    /** Último desplazamiento aplicado a los slots. */
     int32 LastAppliedScrollOffset = INDEX_NONE;
 
-    /** Desplazamiento compartido por las instancias del terminal. */
     static int32 GlobalScrollOffset;
 
     // ------------------------------------------------------------
     // ADMINISTRACIÓN DE SLOTS
     // ------------------------------------------------------------
 
-    /** Crea la cantidad de slots configurada en DisplaySlotCount. */
     void CreateSlotActors();
 
-    /** Actualiza los datos, iconos y posiciones de los slots existentes. */
     void UpdateVisibleSlots();
 
-    /** Ajusta el desplazamiento para que no supere el catálogo disponible. */
     void ClampScrollOffset(int32 TotalAssets);
 
-    /**
-     * Busca la textura correspondiente a un símbolo.
-     *
-     * Admite símbolos individuales y símbolos de mercado terminados
-     * en USDT, como BTCUSDT.
-     */
-    UTexture2D* FindIconTexture(const FString& AssetSymbol) const;
+    // ------------------------------------------------------------
+    // RESOLUCIÓN DE PRESENTACIÓN
+    // ------------------------------------------------------------
 
-    /** Obtiene una referencia válida al Subsystem financiero. */
+    bool ResolveAssetPresentation(
+        const FString& AssetSymbol,
+        FString& OutAssetKey,
+        UTexture2D*& OutIconTexture
+    ) const;
+
+    // ------------------------------------------------------------
+    // ADMINISTRACIÓN DE NAVEGACIÓN
+    // ------------------------------------------------------------
+
+    /**
+     * Entrega la referencia de este terminal al widget de navegación
+     * y actualiza su contador.
+     */
+    void InitializeNavigationWidget();
+
+    /**
+     * Actualiza el contador después de cambios en los slots
+     * o en la paginación.
+     */
+    void RefreshNavigationWidget();
+
+    // ------------------------------------------------------------
+    // SUBSYSTEM Y DEPURACIÓN
+    // ------------------------------------------------------------
+
     UCryptoFinanceSubsystem* ResolveFinanceSubsystem();
 
-    /**
-     * Muestra en pantalla los datos de los activos visibles.
-     *
-     * Es const porque solamente consulta información y no modifica
-     * el estado interno del terminal.
-     */
     void PrintVisibleAssets() const;
 };
