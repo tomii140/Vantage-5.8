@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -9,7 +8,6 @@
 class ACryptoSlotActor;
 class UTexture2D;
 class USceneComponent;
-class UWidgetComponent;
 
 /**
  * Modos disponibles para distribuir espacialmente los slots.
@@ -24,7 +22,7 @@ enum class ETerminalMode : uint8
 };
 
 /**
- * Evento emitido cuando se selecciona un activo.
+ * Notifica qu茅 activo financiero fue seleccionado desde un slot.
  */
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
     FOnCryptoAssetSelected,
@@ -33,20 +31,32 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 );
 
 /**
- * ACryptoTerminalActor
+ * Notifica que el estado de paginaci贸n del terminal cambi贸.
  *
- * Actor responsable de coordinar la presentaci髇 de los activos.
+ * ACryptoNavigationActor escucha este evento para refrescar el contador
+ * del widget. El terminal no necesita conocer ni administrar el widget.
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnTerminalNavigationUpdated);
+
+/**
+ * Actor principal del terminal de criptomonedas Vantage.
  *
- * RESPONSABILIDADES:
- * - Obtener los datos del CryptoFinanceSubsystem.
- * - Crear y administrar los slots visibles.
- * - Distribuir los slots seg鷑 el modo espacial seleccionado.
- * - Resolver la KEY y la textura de cada criptomoneda.
- * - Actualizar los slots cuando el Subsystem emite datos nuevos.
- * - Administrar la paginaci髇.
- * - Crear y administrar el componente de navegaci髇 global.
+ * Responsabilidades:
+ * - Obtener y distribuir datos del Subsystem financiero.
+ * - Crear y administrar los actores visuales de slots.
+ * - Resolver las KEY y texturas de los activos.
+ * - Calcular la distribuci贸n espacial.
+ * - Administrar la paginaci贸n.
  *
- * No procesa mensajes JSON ni administra conexiones WebSocket.
+ * La interfaz de navegaci贸n vive en ACryptoNavigationActor, un Actor
+ * independiente que se comunica mediante OnTerminalNavigationUpdated
+ * y conserva su propia referencia a este terminal.
+ *
+ * Jerarqu铆a de componentes:
+ *
+ * RootComponent
+ * 鈹斺攢鈹� SlotsRootComponent
+ *     鈹斺攢鈹� SpawnedSlots
  */
 UCLASS()
 class VANTAGE_API ACryptoTerminalActor : public AActor
@@ -55,235 +65,209 @@ class VANTAGE_API ACryptoTerminalActor : public AActor
 
 public:
 
-    // ------------------------------------------------------------
-    // CONSTRUCTOR
-    // ------------------------------------------------------------
-
     ACryptoTerminalActor();
 
-    // ------------------------------------------------------------
-    // CONFIGURACI覰 GENERAL
-    // ------------------------------------------------------------
+    // ========================================================
+    // CONFIGURACI脫N DE DEPURACI脫N
+    // ========================================================
 
-    UPROPERTY(
-        EditAnywhere,
-        BlueprintReadWrite,
-        Category = "Vantage|Debug",
-        meta = (ClampMin = "0.1")
-    )
+    /** Intervalo entre impresiones peri贸dicas de diagn贸stico. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Debug", meta = (ClampMin = "0.1"))
     float PrintInterval = 2.0f;
 
+    /** Habilita o deshabilita los mensajes peri贸dicos de depuraci贸n. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Debug")
     bool bEnableDebugOutput = true;
 
-    // ------------------------------------------------------------
-    // CONFIGURACI覰 DE VISUALIZACI覰
-    // ------------------------------------------------------------
 
+    // ========================================================
+    // CONFIGURACI脫N DE DISTRIBUCI脫N DE SLOTS
+    // ========================================================
+
+    /** Modo espacial utilizado para distribuir las tarjetas. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout")
     ETerminalMode CurrentLayoutMode = ETerminalMode::Mode3D_Horizontal;
 
-    /**
-     * Cantidad de slots visibles simult醤eamente.
-     * Tambi閚 determina cu醤tos activos contiene cada p醙ina.
-     */
-    UPROPERTY(
-        EditAnywhere,
-        BlueprintReadWrite,
-        Category = "Vantage|Layout",
-        meta = (ClampMin = "1", ClampMax = "25")
-    )
+    /** Cantidad de slots visibles simult谩neamente. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout", meta = (ClampMin = "1", ClampMax = "25"))
     int32 DisplaySlotCount = 5;
 
-    UPROPERTY(
-        EditAnywhere,
-        BlueprintReadWrite,
-        Category = "Vantage|Layout",
-        meta = (ClampMin = "1.0")
-    )
+    /** Separaci贸n entre slots seg煤n el modo de distribuci贸n. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout", meta = (ClampMin = "1.0"))
     float SlotSpacing = 120.0f;
 
-    UPROPERTY(
-        EditAnywhere,
-        BlueprintReadWrite,
-        Category = "Vantage|Layout",
-        meta = (ClampMin = "1.0")
-    )
+    /** Radio utilizado por la distribuci贸n circular. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout", meta = (ClampMin = "1.0"))
     float CircularLayoutRadius = 200.0f;
 
-    // ------------------------------------------------------------
-    // CONFIGURACI覰 DE ACTORES
-    // ------------------------------------------------------------
 
+    // ========================================================
+    // TRANSFORMACI脫N DEL GRUPO DE SLOTS
+    // ========================================================
+
+    /** Componente padre exclusivo de los actores visuales de slots. */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Vantage|Components")
+    TObjectPtr<USceneComponent> SlotsRootComponent;
+
+    /** Posici贸n local del conjunto completo de slots respecto al Root. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout|Transform")
+    FVector SlotsRelativeLocation = FVector::ZeroVector;
+
+    /** Rotaci贸n local del conjunto completo de slots respecto al Root. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout|Transform")
+    FRotator SlotsRelativeRotation = FRotator::ZeroRotator;
+
+    /** Escala local del conjunto completo de slots respecto al Root. */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Layout|Transform")
+    FVector SlotsRelativeScale = FVector::OneVector;
+
+
+    // ========================================================
+    // CONFIGURACI脫N DE ACTIVOS E ICONOS
+    // ========================================================
+
+    /** Clase nativa o Blueprint utilizada para instanciar cada slot. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     TSubclassOf<ACryptoSlotActor> BaseSlotClass;
 
-    /**
-     * Relaciona las abreviaciones de las criptomonedas con sus texturas.
-     */
+    /** Relaci贸n entre la KEY del activo y su textura de icono. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     TMap<FString, TObjectPtr<UTexture2D>> CoinTextureMap;
 
+    /** Permite activar o desactivar la creaci贸n autom谩tica de slots. */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Vantage|Setup")
     bool bSpawnSlotActors = true;
 
-    // ------------------------------------------------------------
-    // NAVEGACI覰 GLOBAL
-    // ------------------------------------------------------------
 
-    /**
-     * Componente visual 鷑ico para la navegaci髇 del terminal.
-     *
-     * Su Widget Class se configura desde el editor con
-     * WBP_CryptoNavigation.
-     *
-     * No pertenece a ning鷑 ACryptoSlotActor.
-     */
-    UPROPERTY(
-        VisibleAnywhere,
-        BlueprintReadOnly,
-        Category = "Vantage|Navigation"
-    )
-    TObjectPtr<UWidgetComponent> NavigationWidgetComponent;
+    // ========================================================
+    // EVENTOS P脷BLICOS
+    // ========================================================
 
-    // ------------------------------------------------------------
-    // EVENTOS P贐LICOS
-    // ------------------------------------------------------------
-
+    /** Evento emitido cuando el usuario selecciona un activo. */
     UPROPERTY(BlueprintAssignable, Category = "Vantage|Events")
     FOnCryptoAssetSelected OnCryptoAssetSelected;
 
-    // ------------------------------------------------------------
-    // PAGINACI覰
-    // ------------------------------------------------------------
+    /**
+     * Evento emitido cuando cambia el estado de paginaci贸n.
+     *
+     * ACryptoNavigationActor se suscribe para actualizar el contador
+     * visual, sin que este terminal conozca el UserWidget.
+     */
+    UPROPERTY(BlueprintAssignable, Category = "Vantage|Events|Pagination")
+    FOnTerminalNavigationUpdated OnTerminalNavigationUpdated;
 
+
+    // ========================================================
+    // API P脷BLICA: PAGINACI脫N Y ACTUALIZACI脫N
+    // ========================================================
+
+    /** Establece el desplazamiento global de la paginaci贸n. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal")
     static void SetGlobalScrollOffset(int32 NewOffset);
 
+    /** Devuelve el desplazamiento global actual. */
     UFUNCTION(BlueprintPure, Category = "Vantage|Terminal")
     static int32 GetGlobalScrollOffset();
 
+    /** Navega una cantidad relativa de p谩ginas. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal|Pagination")
     void NavigatePage(int32 PageDelta);
 
+    /** Devuelve el 铆ndice de p谩gina actual, comenzando en cero. */
     UFUNCTION(BlueprintPure, Category = "Vantage|Terminal|Pagination")
     int32 GetCurrentPageIndex() const;
 
+    /** Devuelve la cantidad total de p谩ginas disponibles. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal|Pagination")
     int32 GetTotalPageCount();
 
+    /** Solicita una actualizaci贸n visual del terminal. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Terminal")
     void RefreshTerminal();
 
-    // ------------------------------------------------------------
-    // DISTRIBUCI覰 ESPACIAL
-    // ------------------------------------------------------------
-
+    /** Calcula la posici贸n local de un slot seg煤n el layout activo. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Layout")
-    FVector CalculateSlotPosition(
-        int32 Index,
-        int32 TotalElements
-    ) const;
+    FVector CalculateSlotPosition(int32 Index, int32 TotalElements) const;
 
-    // ------------------------------------------------------------
-    // INTERACCI覰
-    // ------------------------------------------------------------
-
+    /** Procesa la selecci贸n de un activo desde un slot. */
     UFUNCTION(BlueprintCallable, Category = "Vantage|Input")
     void HandleSlotTap(const FString& AssetSymbol);
 
+
 protected:
 
-    // ------------------------------------------------------------
-    // CICLO DE VIDA
-    // ------------------------------------------------------------
+    // ========================================================
+    // CICLO DE VIDA Y EVENTOS INTERNOS
+    // ========================================================
 
+    virtual void OnConstruction(const FTransform& Transform) override;
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
-    virtual void EndPlay(
-        const EEndPlayReason::Type EndPlayReason
-    ) override;
-
-    // ------------------------------------------------------------
-    // EVENTOS DEL SUBSYSTEM
-    // ------------------------------------------------------------
-
+    /** Callback del Subsystem financiero cuando cambian los datos. */
     UFUNCTION()
-    void HandleCryptoDataUpdated(
-        const TArray<FCryptoAssetData>& UpdatedAssets
-    );
+    void HandleCryptoDataUpdated(const TArray<FCryptoAssetData>& UpdatedAssets);
+
 
 public:
 
-    // ------------------------------------------------------------
-    // ACTUALIZACI覰 POR FRAME
-    // ------------------------------------------------------------
-
+    /** Tick utilizado para detectar cambios de p谩gina y depuraci贸n. */
     virtual void Tick(float DeltaTime) override;
+
 
 private:
 
-    // ------------------------------------------------------------
-    // REFERENCIAS A SISTEMAS Y ACTORES
-    // ------------------------------------------------------------
+    // ========================================================
+    // ESTADO INTERNO
+    // ========================================================
 
+    /** Subsystem financiero utilizado como fuente de datos. */
     UPROPERTY(Transient)
     TObjectPtr<UCryptoFinanceSubsystem> FinanceSubsystem;
 
+    /** Actores de slot creados y administrados por este terminal. */
     UPROPERTY(Transient)
     TArray<TObjectPtr<ACryptoSlotActor>> SpawnedSlots;
 
-    // ------------------------------------------------------------
-    // ESTADO INTERNO
-    // ------------------------------------------------------------
-
+    /** Tiempo acumulado para la salida peri贸dica de diagn贸stico. */
     float TimeSinceLastPrint = 0.0f;
 
+    /** 脷ltimo desplazamiento aplicado a los slots visibles. */
     int32 LastAppliedScrollOffset = INDEX_NONE;
 
+    /** Desplazamiento compartido entre instancias del terminal. */
     static int32 GlobalScrollOffset;
 
-    // ------------------------------------------------------------
-    // ADMINISTRACI覰 DE SLOTS
-    // ------------------------------------------------------------
 
+    // ========================================================
+    // FUNCIONES PRIVADAS DE GESTI脫N
+    // ========================================================
+
+    /** Crea y adjunta los actores de slot a SlotsRootComponent. */
     void CreateSlotActors();
 
+    /** Actualiza los slots con los activos de la p谩gina actual. */
     void UpdateVisibleSlots();
 
+    /** Ajusta el desplazamiento a los l铆mites del cat谩logo. */
     void ClampScrollOffset(int32 TotalAssets);
 
-    // ------------------------------------------------------------
-    // RESOLUCI覰 DE PRESENTACI覰
-    // ------------------------------------------------------------
-
+    /**
+     * Resuelve la KEY y textura del activo a partir de su s铆mbolo.
+     * Devuelve false si no existe una presentaci贸n configurada.
+     */
     bool ResolveAssetPresentation(
         const FString& AssetSymbol,
         FString& OutAssetKey,
         UTexture2D*& OutIconTexture
     ) const;
 
-    // ------------------------------------------------------------
-    // ADMINISTRACI覰 DE NAVEGACI覰
-    // ------------------------------------------------------------
+    /** Aplica el transform editable al grupo de slots. */
+    void ApplySlotsRootTransform();
 
-    /**
-     * Entrega la referencia de este terminal al widget de navegaci髇
-     * y actualiza su contador.
-     */
-    void InitializeNavigationWidget();
-
-    /**
-     * Actualiza el contador despu閟 de cambios en los slots
-     * o en la paginaci髇.
-     */
-    void RefreshNavigationWidget();
-
-    // ------------------------------------------------------------
-    // SUBSYSTEM Y DEPURACI覰
-    // ------------------------------------------------------------
-
+    /** Obtiene la referencia al Subsystem financiero. */
     UCryptoFinanceSubsystem* ResolveFinanceSubsystem();
 
+    /** Imprime informaci贸n de los activos visibles para depuraci贸n. */
     void PrintVisibleAssets() const;
 };

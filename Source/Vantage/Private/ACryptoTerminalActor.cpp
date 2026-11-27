@@ -4,12 +4,8 @@
 // Actores visuales.
 #include "ACryptoSlotActor.h"
 
-// Widget de navegación.
-#include "CryptoNavigationWidget.h"
-
 // Componentes.
 #include "Components/SceneComponent.h"
-#include "Components/WidgetComponent.h"
 
 // Sistema financiero.
 #include "CryptoFinanceSubsystem.h"
@@ -42,13 +38,12 @@ int32 ACryptoTerminalActor::GlobalScrollOffset = 0;
  * ROOT:
  * - RootComponent.
  *
- * COMPONENTE DE NAVEGACIÓN:
- * - NavigationWidgetComponent.
+ * RAMA DE SLOTS:
+ * - SlotsRootComponent.
+ * - Actores SpawnedSlots adjuntados a este componente.
  *
- * Los slots continúan siendo actores independientes adjuntados
- * al terminal durante CreateSlotActors().
- *
- * El WidgetComponent de navegación es único y global.
+ * La navegación se administra desde un ACryptoNavigationActor
+ * independiente y no forma parte de esta jerarquía.
  */
 ACryptoTerminalActor::ACryptoTerminalActor()
 {
@@ -65,38 +60,47 @@ ACryptoTerminalActor::ACryptoTerminalActor()
     RootComponent = SceneRoot;
 
     // --------------------------------------------------------
-    // 2. CREAR COMPONENTE GLOBAL DE NAVEGACIÓN
+    // 2. CREAR ROOT INDEPENDIENTE PARA LOS SLOTS
     // --------------------------------------------------------
 
-    NavigationWidgetComponent =
-        CreateDefaultSubobject<UWidgetComponent>(
-            TEXT("NavigationWidgetComponent")
-        );
-
-    NavigationWidgetComponent->SetupAttachment(RootComponent);
-
-    NavigationWidgetComponent->SetWidgetSpace(
-        EWidgetSpace::World
+    SlotsRootComponent = CreateDefaultSubobject<USceneComponent>(
+        TEXT("SlotsRootComponent")
     );
 
-    NavigationWidgetComponent->SetDrawSize(
-        FVector2D(500.0f, 120.0f)
-    );
+    SlotsRootComponent->SetupAttachment(RootComponent);
 
-    NavigationWidgetComponent->SetPivot(
-        FVector2D(0.5f, 0.5f)
-    );
+}
 
-    /*
-     * Posición provisional:
-     * debajo del conjunto de slots.
-     *
-     * Se puede modificar desde el editor sin alterar
-     * la lógica de paginación.
-     */
-    NavigationWidgetComponent->SetRelativeLocation(
-        FVector(0.0f, 0.0f, -180.0f)
-    );
+/**
+ * Aplica la transformación editable del grupo de slots durante
+ * la construcción del actor en el editor.
+ *
+ * OnConstruction se ejecuta cuando se modifican las propiedades
+ * editables del actor, permitiendo ajustar el conjunto de slots.
+ */
+void ACryptoTerminalActor::OnConstruction(const FTransform& Transform)
+{
+    Super::OnConstruction(Transform);
+
+    ApplySlotsRootTransform();
+}
+
+/**
+ * Aplica posición, rotación y escala locales al grupo de slots.
+ *
+ * Se centraliza la operación para utilizar exactamente la misma
+ * configuración tanto en el editor como al iniciar Play.
+ */
+void ACryptoTerminalActor::ApplySlotsRootTransform()
+{
+    if (!IsValid(SlotsRootComponent))
+    {
+        return;
+    }
+
+    SlotsRootComponent->SetRelativeLocation(SlotsRelativeLocation);
+    SlotsRootComponent->SetRelativeRotation(SlotsRelativeRotation);
+    SlotsRootComponent->SetRelativeScale3D(SlotsRelativeScale);
 }
 
 
@@ -105,18 +109,18 @@ ACryptoTerminalActor::ACryptoTerminalActor()
 // ============================================================
 
 /**
- * Inicializa la navegación, obtiene el Subsystem financiero,
- * registra el delegado y crea los slots visuales.
+ * Obtiene el Subsystem financiero, registra el delegado de datos
+ * y crea los slots visuales. La navegación se inicializa en otro Actor.
  */
 void ACryptoTerminalActor::BeginPlay()
 {
     Super::BeginPlay();
 
     // --------------------------------------------------------
-    // 1. INICIALIZAR NAVEGACIÓN GLOBAL
+    // 1. APLICAR TRANSFORMACIÓN DE SLOTS
     // --------------------------------------------------------
 
-    InitializeNavigationWidget();
+    ApplySlotsRootTransform();
 
     // --------------------------------------------------------
     // 2. OBTENER EL SUBSYSTEM FINANCIERO
@@ -132,7 +136,7 @@ void ACryptoTerminalActor::BeginPlay()
             TEXT("[Vantage] Terminal: no se pudo obtener CryptoFinanceSubsystem.")
         );
 
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
 
         return;
     }
@@ -220,22 +224,7 @@ void ACryptoTerminalActor::EndPlay(
     }
 
     // --------------------------------------------------------
-    // 2. LIMPIAR REFERENCIA DEL WIDGET
-    // --------------------------------------------------------
-
-    if (NavigationWidgetComponent)
-    {
-        if (UCryptoNavigationWidget* NavigationWidget =
-            Cast<UCryptoNavigationWidget>(
-                NavigationWidgetComponent->GetUserWidgetObject()
-            ))
-        {
-            NavigationWidget->SetTerminalReference(nullptr);
-        }
-    }
-
-    // --------------------------------------------------------
-    // 3. DESTRUIR LOS SLOTS ADMINISTRADOS
+    // 2. DESTRUIR LOS SLOTS ADMINISTRADOS
     // --------------------------------------------------------
 
     for (ACryptoSlotActor* Slot : SpawnedSlots)
@@ -255,129 +244,6 @@ void ACryptoTerminalActor::EndPlay(
     FinanceSubsystem = nullptr;
 
     Super::EndPlay(EndPlayReason);
-}
-
-
-// ============================================================
-// INICIALIZACIÓN DEL WIDGET DE NAVEGACIÓN
-// ============================================================
-
-/**
- * Inicializa el UserWidget contenido en NavigationWidgetComponent.
- *
- * El componente obtiene WBP_CryptoNavigation desde su propiedad
- * Widget Class configurada en el editor.
- *
- * Después de crear el widget, el terminal le entrega directamente
- * su propia referencia mediante SetTerminalReference(this).
- *
- * No se realizan búsquedas globales de actores.
- */
-void ACryptoTerminalActor::InitializeNavigationWidget()
-{
-    if (!IsValid(NavigationWidgetComponent))
-    {
-        UE_LOG(
-            LogTemp,
-            Error,
-            TEXT("[Vantage][Navigation] NavigationWidgetComponent inválido.")
-        );
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // 1. VERIFICAR CLASE DEL WIDGET
-    // --------------------------------------------------------
-
-    if (!NavigationWidgetComponent->GetWidgetClass())
-    {
-        UE_LOG(
-            LogTemp,
-            Warning,
-            TEXT("[Vantage][Navigation] No hay Widget Class asignada. Configurar WBP_CryptoNavigation.")
-        );
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // 2. INICIALIZAR EL USER WIDGET
-    // --------------------------------------------------------
-
-    NavigationWidgetComponent->InitWidget();
-
-    UUserWidget* UserWidget =
-        NavigationWidgetComponent->GetUserWidgetObject();
-
-    if (!IsValid(UserWidget))
-    {
-        UE_LOG(
-            LogTemp,
-            Error,
-            TEXT("[Vantage][Navigation] No se pudo crear el UserWidget.")
-        );
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // 3. COMPROBAR LA CLASE BASE NATIVA
-    // --------------------------------------------------------
-
-    UCryptoNavigationWidget* NavigationWidget =
-        Cast<UCryptoNavigationWidget>(UserWidget);
-
-    if (!NavigationWidget)
-    {
-        UE_LOG(
-            LogTemp,
-            Error,
-            TEXT("[Vantage][Navigation] WBP_CryptoNavigation no utiliza CryptoNavigationWidget como clase padre.")
-        );
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // 4. ENTREGAR REFERENCIA DIRECTA AL TERMINAL
-    // --------------------------------------------------------
-
-    NavigationWidget->SetTerminalReference(this);
-
-    UE_LOG(
-        LogTemp,
-        Log,
-        TEXT("[Vantage][Navigation] Widget inicializado y vinculado al terminal: %s"),
-        *GetName()
-    );
-}
-
-
-/**
- * Actualiza el estado visual del widget de navegación.
- *
- * No busca actores ni consulta el mundo.
- * Utiliza exclusivamente el componente que pertenece al terminal.
- */
-void ACryptoTerminalActor::RefreshNavigationWidget()
-{
-    if (!IsValid(NavigationWidgetComponent))
-    {
-        return;
-    }
-
-    UCryptoNavigationWidget* NavigationWidget =
-        Cast<UCryptoNavigationWidget>(
-            NavigationWidgetComponent->GetUserWidgetObject()
-        );
-
-    if (!IsValid(NavigationWidget))
-    {
-        return;
-    }
-
-    NavigationWidget->RefreshNavigation();
 }
 
 
@@ -454,7 +320,7 @@ void ACryptoTerminalActor::NavigatePage(int32 PageDelta)
             TEXT("[Vantage][Navigation] No se puede navegar: FinanceSubsystem inválido.")
         );
 
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
 
         return;
     }
@@ -513,7 +379,7 @@ void ACryptoTerminalActor::NavigatePage(int32 PageDelta)
 
     if (NewPage == CurrentPage)
     {
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
         return;
     }
 
@@ -786,9 +652,13 @@ void ACryptoTerminalActor::CreateSlotActors()
         SpawnParameters.SpawnCollisionHandlingOverride =
             ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 
+        const FTransform SlotSpawnTransform = IsValid(SlotsRootComponent)
+            ? SlotsRootComponent->GetComponentTransform()
+            : GetActorTransform();
+
         ACryptoSlotActor* NewSlot = GetWorld()->SpawnActor<ACryptoSlotActor>(
             BaseSlotClass,
-            GetActorTransform(),
+            SlotSpawnTransform,
             SpawnParameters
         );
 
@@ -804,10 +674,21 @@ void ACryptoTerminalActor::CreateSlotActors()
             continue;
         }
 
-        NewSlot->AttachToActor(
-            this,
-            FAttachmentTransformRules::KeepWorldTransform
-        );
+        if (IsValid(SlotsRootComponent))
+        {
+            NewSlot->AttachToComponent(
+                SlotsRootComponent.Get(),
+                FAttachmentTransformRules::KeepWorldTransform
+            );
+        }
+        else
+        {
+            // Respaldo defensivo: mantiene el comportamiento anterior.
+            NewSlot->AttachToActor(
+                this,
+                FAttachmentTransformRules::KeepWorldTransform
+            );
+        }
 
         NewSlot->SetActorRelativeLocation(
             CalculateSlotPosition(Index, SafeDisplayCount)
@@ -1023,7 +904,7 @@ void ACryptoTerminalActor::UpdateVisibleSlots()
             TEXT("[Vantage][Terminal][TRACE] UpdateVisibleSlots ABORT | FinanceSubsystem inválido.")
         );
 
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
 
         return;
     }
@@ -1036,7 +917,7 @@ void ACryptoTerminalActor::UpdateVisibleSlots()
             TEXT("[Vantage][Terminal][TRACE] UpdateVisibleSlots ABORT | SpawnedSlots está vacío.")
         );
 
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
 
         return;
     }
@@ -1063,7 +944,7 @@ void ACryptoTerminalActor::UpdateVisibleSlots()
 
         GlobalScrollOffset = 0;
 
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
 
         return;
     }
@@ -1187,10 +1068,10 @@ void ACryptoTerminalActor::UpdateVisibleSlots()
     LastAppliedScrollOffset = GlobalScrollOffset;
 
     // --------------------------------------------------------
-    // ACTUALIZAR CONTADOR DE NAVEGACIÓN
+    // NOTIFICAR CAMBIO DEL ESTADO DE NAVEGACIÓN
     // --------------------------------------------------------
 
-    RefreshNavigationWidget();
+    OnTerminalNavigationUpdated.Broadcast();
 }
 
 
@@ -1210,7 +1091,7 @@ void ACryptoTerminalActor::RefreshTerminal()
 
     if (!FinanceSubsystem)
     {
-        RefreshNavigationWidget();
+        OnTerminalNavigationUpdated.Broadcast();
         return;
     }
 
